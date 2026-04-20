@@ -13,6 +13,7 @@ Streams music from [Qobuz](https://www.qobuz.com/) directly inside foobar2000.
 - Tracks are stored as `qobuz://track/<id>` URIs and work in saved playlists
 - **Direct URL support** — paste or drag a Qobuz share URL to play it immediately:
   - Track URLs: `https://open.qobuz.com/track/<id>`
+  - Album URLs: `https://play.qobuz.com/album/<id>`, `https://open.qobuz.com/album/<id>`
   - Playlist URLs: `https://play.qobuz.com/playlist/<id>`, `https://open.qobuz.com/playlist/<id>`, `https://www.qobuz.com/<locale>/playlists/<slug>/<id>`
 
 ## Requirements

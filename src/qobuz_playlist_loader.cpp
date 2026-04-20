@@ -4,6 +4,33 @@
 #include "stdafx.h"
 #include "qobuz_api.h"
 
+// ---- Shared URL helpers ----------------------------------------------------
+
+// Returns the path portion of an HTTPS URL on a known Qobuz domain, or nullptr.
+static const char* qobuz_url_path(const char* url) {
+    if (!pfc::string_has_prefix(url, "https://")) return nullptr;
+    const char* after_scheme = url + 8;
+    for (const char* host : { "play.qobuz.com", "open.qobuz.com", "www.qobuz.com" }) {
+        size_t hlen = std::strlen(host);
+        if (std::strncmp(after_scheme, host, hlen) == 0 &&
+            (after_scheme[hlen] == '/' || after_scheme[hlen] == '\0'))
+            return after_scheme + hlen;
+    }
+    return nullptr;
+}
+
+// Returns the first path segment after the given prefix segment (e.g. "/album/"),
+// stripping any trailing query string or fragment. Returns empty string if not found.
+static std::string segment_after(const char* path, const char* needle) {
+    const char* seg = std::strstr(path, needle);
+    if (!seg) return {};
+    const char* p = seg + std::strlen(needle);
+    const char* end = p;
+    while (*end && *end != '/' && *end != '?' && *end != '#') ++end;
+    if (end == p) return {};
+    return std::string(p, end - p);
+}
+
 // ---- Qobuz playlist URL patterns -------------------------------------------
 //
 // Supported forms:
@@ -14,46 +41,24 @@
 // The playlist ID is always the last numeric path segment.
 
 static std::string parse_qobuz_playlist_id(const char* path) {
-    // Must be an HTTPS URL on a known Qobuz domain
-    if (!pfc::string_has_prefix(path, "https://"))
-        return {};
+    const char* url_path = qobuz_url_path(path);
+    if (!url_path) return {};
 
-    const char* after_scheme = path + 8; // skip "https://"
-    // Match known hosts
-    bool known_host = false;
-    const char* path_start = nullptr;
-    for (const char* host : { "play.qobuz.com", "open.qobuz.com", "www.qobuz.com" }) {
-        size_t hlen = std::strlen(host);
-        if (std::strncmp(after_scheme, host, hlen) == 0 &&
-            (after_scheme[hlen] == '/' || after_scheme[hlen] == '\0')) {
-            known_host = true;
-            path_start = after_scheme + hlen;
-            break;
-        }
-    }
-    if (!known_host || !path_start) return {};
-
-    // Path must contain "/playlist/" or "/playlists/"
-    const char* seg = std::strstr(path_start, "/playlist/");
-    if (!seg) seg = std::strstr(path_start, "/playlists/");
+    const char* seg = std::strstr(url_path, "/playlist/");
+    if (!seg) seg = std::strstr(url_path, "/playlists/");
     if (!seg) return {};
 
-    // Skip to the last path segment (the numeric ID)
-    // Walk forward past any slug segments to find a purely numeric segment.
-    const char* p = seg + 1; // skip leading '/'
-    // skip "playlist(s)/"
+    // Walk forward past any slug segments to find the last purely-numeric segment.
+    const char* p = seg + 1;
     const char* slash = std::strchr(p, '/');
     if (!slash) return {};
-    p = slash + 1; // now at the first segment after "playlist(s)"
+    p = slash + 1;
 
-    // Scan all remaining segments; the ID is the last numeric one.
     std::string last_numeric;
     while (*p) {
-        // Find segment end
         const char* end = p;
         while (*end && *end != '/' && *end != '?' && *end != '#') ++end;
 
-        // Check if this segment is purely numeric
         bool numeric = (end > p);
         for (const char* c = p; c < end && numeric; ++c)
             numeric = (*c >= '0' && *c <= '9');
@@ -64,6 +69,20 @@ static std::string parse_qobuz_playlist_id(const char* path) {
         p = end + 1;
     }
     return last_numeric;
+}
+
+// ---- Qobuz album URL patterns ----------------------------------------------
+//
+// Supported forms:
+//   https://play.qobuz.com/album/<id>
+//   https://open.qobuz.com/album/<id>
+//
+// Album IDs are alphanumeric slugs (e.g. "hzhzsr05oisxc").
+
+static std::string parse_qobuz_album_id(const char* path) {
+    const char* url_path = qobuz_url_path(path);
+    if (!url_path) return {};
+    return segment_after(url_path, "/album/");
 }
 
 // ---- playlist_loader implementation ----------------------------------------
@@ -77,12 +96,17 @@ public:
               playlist_loader_callback::ptr p_callback,
               abort_callback& p_abort) override
     {
-        std::string playlist_id = parse_qobuz_playlist_id(p_path);
-        if (playlist_id.empty())
-            throw exception_io_unsupported_format();
+        std::vector<QobuzTrack> tracks;
 
-        auto tracks = g_qobuz_api.get_playlist_tracks(playlist_id.c_str(), p_abort);
-        if (tracks.empty()) return;
+        std::string playlist_id = parse_qobuz_playlist_id(p_path);
+        std::string album_id    = parse_qobuz_album_id(p_path);
+
+        if (!playlist_id.empty())
+            tracks = g_qobuz_api.get_playlist_tracks(playlist_id.c_str(), p_abort);
+        else if (!album_id.empty())
+            tracks = g_qobuz_api.get_album_tracks(album_id.c_str(), p_abort);
+        else
+            throw exception_io_unsupported_format();
 
         for (const auto& track : tracks) {
             p_abort.check();
