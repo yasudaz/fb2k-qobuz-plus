@@ -24,3 +24,27 @@ BEGIN
     PUSHBUTTON      "Play Now", IDC_PLAY_NOW, 92, 282, 60, 14, WS_TABSTOP
     PUSHBUTTON      "Close", IDC_CLOSE_BTN, 397, 282, 76, 14, WS_TABSTOP
 END
+
+IDD_QOBUZ_PREFS DIALOGEX 0, 0, 320, 150
+STYLE DS_SETFONT | DS_FIXEDSYS | DS_CONTROL | WS_CHILD | WS_VISIBLE
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Auth token:", -1, 7, 9, 55, 8
+    EDITTEXT        IDC_PREFS_AUTH_EDIT, 65, 7, 248, 14, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
+
+    LTEXT           "Audio quality:", -1, 7, 29, 55, 8
+    CONTROL         "", IDC_PREFS_QUAL_CMB, "ComboBox",
+                    CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 65, 27, 248, 80
+
+    CONTROL         "Advanced (optional overrides)", -1, "Button",
+                    BS_GROUPBOX | WS_GROUP, 7, 50, 306, 58
+
+    LTEXT           "App ID:", -1, 14, 63, 48, 8
+    EDITTEXT        IDC_PREFS_APPID_EDT, 65, 61, 241, 14, ES_AUTOHSCROLL | WS_TABSTOP
+
+    LTEXT           "Secret:", -1, 14, 81, 48, 8
+    EDITTEXT        IDC_PREFS_SECRET_EDT, 65, 79, 241, 14, ES_AUTOHSCROLL | WS_TABSTOP
+
+    LTEXT           "App ID and Secret are auto-fetched. Set these only if auto-fetch fails.",
+                    -1, 14, 98, 292, 8
+END

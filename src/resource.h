@@ -40,15 +40,37 @@
 #ifndef WS_VSCROLL
 #define WS_VSCROLL          0x00200000
 #endif
+#ifndef WS_CHILD
+#define WS_CHILD            0x40000000
+#endif
+#ifndef WS_VISIBLE
+#define WS_VISIBLE          0x10000000
+#endif
 
 // Edit control styles
 #ifndef ES_AUTOHSCROLL
 #define ES_AUTOHSCROLL      0x0080
 #endif
+#ifndef ES_PASSWORD
+#define ES_PASSWORD         0x0020
+#endif
+
+// ComboBox styles
+#ifndef CBS_DROPDOWNLIST
+#define CBS_DROPDOWNLIST    0x0003
+#endif
 
 // Button styles
 #ifndef BS_AUTORADIOBUTTON
 #define BS_AUTORADIOBUTTON  0x0009
+#endif
+#ifndef BS_GROUPBOX
+#define BS_GROUPBOX         0x0007
+#endif
+
+// Dialog styles
+#ifndef DS_CONTROL
+#define DS_CONTROL          0x0400
 #endif
 
 // ListView styles
@@ -73,3 +95,10 @@
 #define IDC_TYPE_TRACKS     1008
 #define IDC_TYPE_ALBUMS     1009
 #define IDC_STATUS_TEXT     1010
+
+// Preferences dialog
+#define IDD_QOBUZ_PREFS     1020
+#define IDC_PREFS_AUTH_EDIT 1021
+#define IDC_PREFS_QUAL_CMB  1022
+#define IDC_PREFS_APPID_EDT 1023
+#define IDC_PREFS_SECRET_EDT 1024

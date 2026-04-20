@@ -9,6 +9,9 @@
 using json = nlohmann::json;
 
 // ---- advconfig settings --------------------------------------------------
+// These cfg_var objects persist settings across sessions.
+// The advconfig branch is intentionally not registered here; the dedicated
+// "Qobuz" page under File > Preferences > Tools provides the UI instead.
 
 static constexpr GUID guid_advcfg_branch =
     { 0x3d8f2a4e, 0x5b1c, 0x4f7d, { 0xa6, 0x2e, 0x8c, 0x9f, 0x3b, 0x4e, 0x7a, 0x16 } };
@@ -21,14 +24,13 @@ static constexpr GUID guid_cfg_secret =
 static constexpr GUID guid_cfg_quality =
     { 0x9b4e3f7c, 0x2a1d, 0x4c8b, { 0x86, 0x94, 0x4f, 0x2a, 0x7d, 0x5c, 0x3e, 0x1b } };
 
-static advconfig_branch_factory g_advcfg_branch(
-    "Qobuz", guid_advcfg_branch, advconfig_branch::guid_branch_tools, 0.0);
-
+// Note: guid_advcfg_branch is not registered as an advconfig_branch_factory,
+// so these entries are hidden from the Advanced Preferences tree.
+// Settings are managed via the dedicated Qobuz page in Preferences > Tools.
 advconfig_string_factory g_cfg_auth_token(
     "User Auth Token",
     "foo_qobuz.auth_token", guid_cfg_auth_token, guid_advcfg_branch, 0, "");
 
-// These two are optional: leave blank to auto-fetch from play.qobuz.com bundle.
 advconfig_string_factory g_cfg_app_id(
     "App ID (leave blank to auto-fetch)",
     "foo_qobuz.app_id", guid_cfg_app_id, guid_advcfg_branch, 1, "");
@@ -38,7 +40,7 @@ advconfig_string_factory g_cfg_secret(
     "foo_qobuz.secret", guid_cfg_secret, guid_advcfg_branch, 2, "");
 
 advconfig_integer_factory g_cfg_quality(
-    "Quality (5=MP3, 6=FLAC 16-bit, 7=FLAC 24-bit, 27=FLAC Hi-Res)",
+    "Quality",
     "foo_qobuz.quality", guid_cfg_quality, guid_advcfg_branch, 3,
     27, 5, 27);
 
