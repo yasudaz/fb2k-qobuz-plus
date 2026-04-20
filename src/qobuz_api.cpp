@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 #include <ctime>
 #include <stdexcept>
+#include <winhttp.h>
 
 using json = nlohmann::json;
 
@@ -46,29 +47,121 @@ advconfig_string_factory&  cfg_app_id()     { return g_cfg_app_id; }
 advconfig_string_factory&  cfg_secret()     { return g_cfg_secret; }
 advconfig_integer_factory& cfg_quality()    { return g_cfg_quality; }
 
+// ---- WinHTTP helpers --------------------------------------------------------
+
+struct ApiWinHttpHandle {
+    HINTERNET h = nullptr;
+    ~ApiWinHttpHandle() { if (h) WinHttpCloseHandle(h); }
+    operator HINTERNET() const { return h; }
+};
+
+
+// Make a WinHTTP GET request and return {http_status_code, response_body}.
+// Custom headers are added as a vector of {name, value} pairs.
+// Query strings in the URL are preserved (lpszExtraInfo is properly handled).
+static std::pair<DWORD, std::string> winhttp_api_get(
+    const char* url_utf8,
+    const std::vector<std::pair<std::string, std::string>>& headers,
+    DWORD timeout_ms = 15000)
+{
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, url_utf8, -1, nullptr, 0);
+    std::wstring wurl(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, url_utf8, -1, &wurl[0], wlen);
+
+    URL_COMPONENTS uc = {};
+    uc.dwStructSize = sizeof(uc);
+    wchar_t host[256]   = {};
+    wchar_t path[4096]  = {};
+    wchar_t extra[4096] = {};
+    uc.lpszHostName  = host;  uc.dwHostNameLength  = 256;
+    uc.lpszUrlPath   = path;  uc.dwUrlPathLength   = 4096;
+    uc.lpszExtraInfo = extra; uc.dwExtraInfoLength = 4096; // captures the ?query=... part
+    if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc))
+        throw std::runtime_error("winhttp_api_get: WinHttpCrackUrl failed");
+
+    // Combine path and query string for WinHttpOpenRequest's pwszObjectName
+    std::wstring full_path = std::wstring(path) + extra;
+
+    ApiWinHttpHandle hSession, hConnect, hRequest;
+    hSession.h = WinHttpOpen(
+        L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession.h) throw std::runtime_error("winhttp_api_get: WinHttpOpen failed");
+
+    WinHttpSetTimeouts(hSession.h, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+
+    hConnect.h = WinHttpConnect(hSession.h, host, uc.nPort, 0);
+    if (!hConnect.h) throw std::runtime_error("winhttp_api_get: WinHttpConnect failed");
+
+    DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    hRequest.h = WinHttpOpenRequest(hConnect.h, L"GET", full_path.c_str(), nullptr,
+                                    WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest.h) throw std::runtime_error("winhttp_api_get: WinHttpOpenRequest failed");
+
+    // Build combined header string: "Name: Value\r\nName2: Value2\r\n"
+    std::wstring hdrs;
+    for (auto& [name, val] : headers) {
+        int n1 = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, nullptr, 0);
+        int n2 = MultiByteToWideChar(CP_UTF8, 0, val.c_str(),  -1, nullptr, 0);
+        std::wstring wname(n1 - 1, L'\0'), wval(n2 - 1, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, &wname[0], n1);
+        MultiByteToWideChar(CP_UTF8, 0, val.c_str(),  -1, &wval[0],  n2);
+        hdrs += wname + L": " + wval + L"\r\n";
+    }
+    if (!hdrs.empty())
+        WinHttpAddRequestHeaders(hRequest.h, hdrs.c_str(), (DWORD)hdrs.size(),
+                                 WINHTTP_ADDREQ_FLAG_ADD);
+
+    if (!WinHttpSendRequest(hRequest.h, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+        throw std::runtime_error("winhttp_api_get: WinHttpSendRequest failed");
+
+    if (!WinHttpReceiveResponse(hRequest.h, nullptr))
+        throw std::runtime_error("winhttp_api_get: WinHttpReceiveResponse failed");
+
+    DWORD status = 0, status_len = sizeof(status);
+    WinHttpQueryHeaders(hRequest.h,
+                        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX,
+                        &status, &status_len, WINHTTP_NO_HEADER_INDEX);
+
+    std::string body;
+    char buf[65536];
+    for (;;) {
+        DWORD avail = 0;
+        if (!WinHttpQueryDataAvailable(hRequest.h, &avail) || avail == 0) break;
+        DWORD to_read = (DWORD)std::min((size_t)avail, sizeof(buf));
+        DWORD got = 0;
+        if (!WinHttpReadData(hRequest.h, buf, to_read, &got) || got == 0) break;
+        body.append(buf, got);
+    }
+    return {status, body};
+}
+
 // ---- QobuzAPI ---------------------------------------------------------------
 
 QobuzAPI g_qobuz_api;
 
-void QobuzAPI::add_auth_headers(http_request::ptr& req) {
+std::string QobuzAPI::do_get(const char* url, abort_callback& /*abort*/) {
     pfc::string8 auth_token;
     g_cfg_auth_token.get(auth_token);
-    req->add_header("X-App-Id",          m_app_id.c_str());
-    req->add_header("X-User-Auth-Token", auth_token.c_str());
-    req->add_header("User-Agent",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-}
 
-std::string QobuzAPI::do_get(const char* url, abort_callback& abort) {
-    auto req = http_client::get()->create_request("GET");
-    add_auth_headers(req);
-    auto resp = req->run(url, abort);
-    std::string body;
-    char buf[8192];
-    for (;;) {
-        size_t got = resp->read(buf, sizeof(buf), abort);
-        if (!got) break;
-        body.append(buf, got);
+    auto [status, body] = winhttp_api_get(url, {
+        {"X-App-Id",          m_app_id},
+        {"X-User-Auth-Token", std::string(auth_token.c_str())}
+    });
+
+    if (status < 200 || status >= 300) {
+        // Credentials may be stale — reset so the next call re-fetches from bundle.
+        {
+            std::lock_guard<std::mutex> lk(m_init_mutex);
+            m_initialized = false;
+            m_secret.clear();
+        }
+        throw std::runtime_error(
+            "HTTP " + std::to_string(status) + ": " +
+            (body.size() > 300 ? body.substr(0, 300) + "..." : body));
     }
     return body;
 }
@@ -84,26 +177,21 @@ void QobuzAPI::ensure_initialized(abort_callback& abort) {
             "Qobuz auth token is not configured. "
             "Go to File > Preferences > Advanced > Tools > Qobuz.");
 
-    // Check for manual override: if BOTH app_id and secret are set, use them.
+    // Read manual overrides (used as fallback only — Qobuz rotates app_id/secrets).
     pfc::string8 manual_app_id, manual_secret;
     g_cfg_app_id.get(manual_app_id);
     g_cfg_secret.get(manual_secret);
 
-    if (!manual_app_id.is_empty() && !manual_secret.is_empty()) {
-        m_app_id  = manual_app_id.c_str();
-        m_secrets = { std::string(manual_secret.c_str()) };
-        m_initialized = true;
-        return;
-    }
-
-    // Auto-fetch from the Qobuz web-player bundle.
+    // Always try to auto-fetch fresh credentials from the web-player bundle first.
+    // Manual credentials are fallback only because Qobuz rotates app_id/secrets.
     try {
         BundleCredentials creds = fetch_bundle_credentials(abort);
         m_app_id  = creds.app_id;
         m_secrets = creds.secrets;
         m_initialized = true;
+        return;
     } catch (std::exception const& e) {
-        // Bundle fetch failed: fall back to whatever advconfig has.
+        // Bundle fetch failed — fall back to manual credentials if set.
         if (!manual_app_id.is_empty()) m_app_id = manual_app_id.c_str();
         if (!manual_secret.is_empty()) m_secrets = { std::string(manual_secret.c_str()) };
 
@@ -121,7 +209,11 @@ pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id,
                                       abort_callback& abort) {
     ensure_initialized(abort);
 
-    // Build the ordered list of secrets to try: cached winner first, then rest.
+    pfc::string8 auth_token;
+    g_cfg_auth_token.get(auth_token);
+    std::string auth_token_str = auth_token.c_str();
+
+    // Build ordered list of secrets to try: cached winner first, then rest.
     std::vector<std::string> to_try;
     if (!m_secret.empty()) to_try.push_back(m_secret);
     for (auto& s : m_secrets)
@@ -138,29 +230,43 @@ pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id,
             format_id, track_id, unix_ts, sec.c_str());
 
         auto md5res = hasher_md5::get()->process_single_string(sig_input);
-        // Qobuz requires lowercase hex for request_sig; asString() returns uppercase
+        // Qobuz requires lowercase hex for request_sig
         pfc::string8 sig_hex = pfc::format_hexdump_lowercase(
             md5res.m_data, sizeof(md5res.m_data), "");
 
-        pfc::string8 url;
-        url << "https://www.qobuz.com/api.json/0.2/track/getFileUrl"
-            << "?track_id="    << track_id
-            << "&format_id="   << format_id
-            << "&intent=stream"
-            << "&request_ts="  << unix_ts
-            << "&request_sig=" << sig_hex;
+        std::string url =
+            std::string("https://www.qobuz.com/api.json/0.2/track/getFileUrl")
+            + "?track_id="    + track_id
+            + "&format_id="   + std::to_string(format_id)
+            + "&intent=stream"
+            + "&request_ts="  + std::to_string(unix_ts)
+            + "&request_sig=" + sig_hex.c_str();
 
         try {
-            auto body = do_get(url, abort);
+            // Use winhttp_api_get directly so we can read 400 response bodies
+            // without throwing — needed to detect wrong-secret vs rights errors.
+            auto [status, body] = winhttp_api_get(url.c_str(), {
+                {"X-App-Id",          m_app_id},
+                {"X-User-Auth-Token", auth_token_str}
+            });
+
+            if (status == 400) {
+                last_error = "HTTP 400: " +
+                    (body.size() > 150 ? body.substr(0, 150) + "..." : body);
+                continue; // wrong secret or signature — try next
+            }
+            if (status < 200 || status >= 300) {
+                last_error = "HTTP " + std::to_string(status);
+                continue;
+            }
             if (body.empty()) { last_error = "empty response"; continue; }
 
             auto j = json::parse(body);
 
-            // Error JSON (wrong secret → 400, or rights issue → error in body)
             if (j.contains("status") && j["status"].is_string() &&
                 j["status"].get<std::string>() == "error") {
                 last_error = j.value("message", "API error");
-                continue;   // try next secret
+                continue;
             }
 
             if (!j.contains("url")) {
@@ -168,12 +274,11 @@ pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id,
                 continue;
             }
 
-            m_secret = sec;  // cache the working secret
+            m_secret = sec; // cache the working secret
             return pfc::string8(j["url"].get<std::string>().c_str());
 
         } catch (std::exception const& e) {
             last_error = e.what();
-            // network error or JSON parse failure — try next secret
         }
     }
 
@@ -200,6 +305,26 @@ static std::string jstr_nested(const json& obj, const char* outer, const char* i
     return jstr(*it, inner);
 }
 
+static int jint(const json& obj, const char* key, int def = 0) {
+    auto it = obj.find(key);
+    if (it == obj.end() || it->is_null()) return def;
+    if (it->is_number()) return it->get<int>();
+    if (it->is_string()) {
+        try { return std::stoi(it->get<std::string>()); } catch (...) {}
+    }
+    return def;
+}
+
+static double jdbl(const json& obj, const char* key, double def = 0.0) {
+    auto it = obj.find(key);
+    if (it == obj.end() || it->is_null()) return def;
+    if (it->is_number()) return it->get<double>();
+    if (it->is_string()) {
+        try { return std::stod(it->get<std::string>()); } catch (...) {}
+    }
+    return def;
+}
+
 static QobuzTrack track_from_json(const json& t) {
     QobuzTrack tr;
     if (t.contains("id") && !t["id"].is_null()) {
@@ -211,12 +336,9 @@ static QobuzTrack track_from_json(const json& t) {
     if (tr.artist.empty()) tr.artist = jstr_nested(t, "artist", "name");
     tr.album    = jstr_nested(t, "album", "title");
     tr.album_id = jstr_nested(t, "album", "id");
-    if (t.contains("duration")               && t["duration"].is_number())
-        tr.duration = t["duration"].get<double>();
-    if (t.contains("maximum_bit_depth")      && t["maximum_bit_depth"].is_number())
-        tr.bit_depth = t["maximum_bit_depth"].get<int>();
-    if (t.contains("maximum_sampling_rate")  && t["maximum_sampling_rate"].is_number())
-        tr.sampling_rate = t["maximum_sampling_rate"].get<double>();
+    tr.duration      = jdbl(t, "duration");
+    tr.bit_depth     = jint(t, "maximum_bit_depth", 16);
+    tr.sampling_rate = jdbl(t, "maximum_sampling_rate", 44.1);
     return tr;
 }
 
@@ -228,15 +350,15 @@ std::vector<QobuzTrack> QobuzAPI::search_tracks(const char* query, int limit,
     pfc::string8 encoded;
     pfc::urlEncode(encoded, query);
 
-    pfc::string8 url;
-    url << "https://www.qobuz.com/api.json/0.2/catalog/search"
-        << "?query="  << encoded
-        << "&type=tracks"
-        << "&limit="  << limit
-        << "&app_id=" << m_app_id.c_str()
-        << "&lang=en&locale=en_US";
+    std::string url =
+        std::string("https://www.qobuz.com/api.json/0.2/catalog/search")
+        + "?query="  + encoded.c_str()
+        + "&type=tracks"
+        + "&limit="  + std::to_string(limit)
+        + "&app_id=" + m_app_id
+        + "&lang=en&locale=en_US";
 
-    auto j = json::parse(do_get(url, abort));
+    auto j = json::parse(do_get(url.c_str(), abort));
     std::vector<QobuzTrack> out;
     if (!j.contains("tracks") || !j["tracks"].contains("items")) return out;
     for (auto& t : j["tracks"]["items"])
@@ -250,15 +372,15 @@ std::vector<QobuzAlbum> QobuzAPI::search_albums(const char* query, int limit,
     pfc::string8 encoded;
     pfc::urlEncode(encoded, query);
 
-    pfc::string8 url;
-    url << "https://www.qobuz.com/api.json/0.2/catalog/search"
-        << "?query="  << encoded
-        << "&type=albums"
-        << "&limit="  << limit
-        << "&app_id=" << m_app_id.c_str()
-        << "&lang=en&locale=en_US";
+    std::string url =
+        std::string("https://www.qobuz.com/api.json/0.2/catalog/search")
+        + "?query="  + encoded.c_str()
+        + "&type=albums"
+        + "&limit="  + std::to_string(limit)
+        + "&app_id=" + m_app_id
+        + "&lang=en&locale=en_US";
 
-    auto j = json::parse(do_get(url, abort));
+    auto j = json::parse(do_get(url.c_str(), abort));
     std::vector<QobuzAlbum> out;
     if (!j.contains("albums") || !j["albums"].contains("items")) return out;
     for (auto& a : j["albums"]["items"]) {
@@ -280,13 +402,13 @@ std::vector<QobuzTrack> QobuzAPI::get_album_tracks(const char* album_id,
                                                      abort_callback& abort) {
     ensure_initialized(abort);
 
-    pfc::string8 url;
-    url << "https://www.qobuz.com/api.json/0.2/album/get"
-        << "?album_id=" << album_id
-        << "&app_id="   << m_app_id.c_str()
-        << "&lang=en&locale=en_US";
+    std::string url =
+        std::string("https://www.qobuz.com/api.json/0.2/album/get")
+        + "?album_id=" + album_id
+        + "&app_id="   + m_app_id
+        + "&lang=en&locale=en_US";
 
-    auto j = json::parse(do_get(url, abort));
+    auto j = json::parse(do_get(url.c_str(), abort));
     std::vector<QobuzTrack> out;
     if (!j.contains("tracks") || !j["tracks"].contains("items")) return out;
 

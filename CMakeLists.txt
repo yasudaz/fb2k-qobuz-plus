@@ -181,7 +181,7 @@ endif()
 # ---- Link libraries ------------------------------------------------------
 if(IS_MSVC_LIKE)
     target_link_libraries(foo_qobuz PRIVATE
-        wininet.lib comctl32.lib comdlg32.lib shell32.lib ole32.lib
+        wininet.lib winhttp.lib comctl32.lib comdlg32.lib shell32.lib ole32.lib
         uuid.lib shlwapi.lib winmm.lib
         # shared.dll import library — provides SHARED_EXPORT functions (uCharLower, etc.)
         "${SDK_DIR}/foobar2000/shared/shared-x64.lib"

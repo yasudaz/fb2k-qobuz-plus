@@ -6,35 +6,82 @@
 #include <map>
 #include <stdexcept>
 #include <cstring>
+#include <winhttp.h>
 
 // ---- helpers ----------------------------------------------------------------
 
-// Fetch a URL with a plain GET; returns body as a string.
-// If max_bytes > 0, adds a Range header so the server only sends that many bytes.
-static std::string simple_get(const char* url, abort_callback& abort,
-                               size_t max_bytes = 0) {
-    auto req = http_client::get()->create_request("GET");
-    req->add_header("User-Agent",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-    if (max_bytes > 0) {
-        // Range: bytes=0-N causes the server to send exactly those bytes and
-        // then close the connection, preventing an infinite read loop on large files.
-        char range_hdr[64];
-        std::snprintf(range_hdr, sizeof(range_hdr), "bytes=0-%zu", max_bytes - 1);
-        req->add_header("Range", range_hdr);
-    }
-    auto resp = req->run(url, abort);
+// RAII handle wrapper for WinHTTP handles.
+struct WinHttpHandle {
+    HINTERNET h = nullptr;
+    ~WinHttpHandle() { if (h) WinHttpCloseHandle(h); }
+    operator HINTERNET() const { return h; }
+};
+
+// Fetch a URL via WinHTTP with a timeout; returns body (up to max_bytes if > 0).
+// Using WinHTTP directly instead of foobar2000's http_client avoids
+// issues with Wine's WinInet stack on large responses.
+static std::string winhttp_get(const char* url_utf8, size_t max_bytes = 0,
+                                DWORD timeout_ms = 15000) {
+    // Convert URL to wide string
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, url_utf8, -1, nullptr, 0);
+    std::wstring wurl(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, url_utf8, -1, &wurl[0], wlen);
+
+    // Crack URL into components
+    URL_COMPONENTS uc = {};
+    uc.dwStructSize       = sizeof(uc);
+    wchar_t host[256]     = {};
+    wchar_t path[2048]    = {};
+    uc.lpszHostName       = host;
+    uc.dwHostNameLength   = 256;
+    uc.lpszUrlPath        = path;
+    uc.dwUrlPathLength    = 2048;
+    if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc))
+        throw std::runtime_error("winhttp_get: WinHttpCrackUrl failed");
+
+    WinHttpHandle hSession, hConnect, hRequest;
+
+    hSession.h = WinHttpOpen(
+        L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession.h)
+        throw std::runtime_error("winhttp_get: WinHttpOpen failed");
+
+    WinHttpSetTimeouts(hSession.h, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+
+    hConnect.h = WinHttpConnect(hSession.h, host, uc.nPort, 0);
+    if (!hConnect.h)
+        throw std::runtime_error("winhttp_get: WinHttpConnect failed");
+
+    DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+    hRequest.h = WinHttpOpenRequest(hConnect.h, L"GET", path, nullptr,
+                                    WINHTTP_NO_REFERER,
+                                    WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest.h)
+        throw std::runtime_error("winhttp_get: WinHttpOpenRequest failed");
+
+    if (!WinHttpSendRequest(hRequest.h, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+        throw std::runtime_error("winhttp_get: WinHttpSendRequest failed");
+
+    if (!WinHttpReceiveResponse(hRequest.h, nullptr))
+        throw std::runtime_error("winhttp_get: WinHttpReceiveResponse failed");
 
     std::string body;
-    body.reserve(max_bytes > 0 ? max_bytes : 65536);
+    if (max_bytes > 0) body.reserve(max_bytes);
+
     char buf[65536];
     for (;;) {
-        size_t want = sizeof(buf);
-        if (max_bytes > 0 && body.size() >= max_bytes) break;
-        size_t got = resp->read(buf, want, abort);
-        if (!got) break;
+        DWORD avail = 0;
+        if (!WinHttpQueryDataAvailable(hRequest.h, &avail) || avail == 0) break;
+        DWORD to_read = (DWORD)std::min((size_t)avail, sizeof(buf));
+        DWORD got = 0;
+        if (!WinHttpReadData(hRequest.h, buf, to_read, &got) || got == 0) break;
         body.append(buf, got);
+        if (max_bytes > 0 && body.size() >= max_bytes) break;
     }
+    // RAII handles close automatically, aborting any pending IO
     return body;
 }
 
@@ -94,7 +141,7 @@ BundleCredentials fetch_bundle_credentials(abort_callback& abort) {
 
     // ---- Step 1: fetch the login page to get the bundle.js URL --------------
     const char* login_url = "https://play.qobuz.com/login";
-    std::string login_page = simple_get(login_url, abort);
+    std::string login_page = winhttp_get(login_url);
 
     // Find: <script src="/resources/X.Y.Z-aXXX/bundle.js"></script>
     const char* bundle_tag = "<script src=\"/resources/";
@@ -111,7 +158,7 @@ BundleCredentials fetch_bundle_credentials(abort_callback& abort) {
 
     // ---- Step 2: fetch first 3 MB of bundle.js (all credentials appear within 2.2 MB) ---
     const size_t BUNDLE_LIMIT = 3 * 1024 * 1024;
-    std::string bundle = simple_get(bundle_url.c_str(), abort, BUNDLE_LIMIT);
+    std::string bundle = winhttp_get(bundle_url.c_str(), BUNDLE_LIMIT);
     if (bundle.size() < 100000)
         throw std::runtime_error("fetch_bundle_credentials: bundle too small, unexpected response");
 
