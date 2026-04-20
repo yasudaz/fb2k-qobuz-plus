@@ -1,0 +1,134 @@
+cmake_minimum_required(VERSION 3.16)
+project(foo_qobuz CXX RC)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ---- Compile definitions -------------------------------------------------
+add_compile_definitions(
+    WIN32
+    _WIN32
+    _WIN32_WINNT=0x0600
+    WINVER=0x0600
+    # WIN32_LEAN_AND_MEAN intentionally omitted: fb2k SDK uses COM `interface` keyword
+    # which requires objbase.h pulled in via the full windows.h
+    NOMINMAX
+    UNICODE
+    _UNICODE
+    FOOBAR2000_HAVE_CFG_VAR_LEGACY=1
+    FOOBAR2000_TARGET_VERSION=82
+    _CRT_SECURE_NO_WARNINGS
+    _CRT_NONSTDC_NO_WARNINGS
+)
+
+# ---- Compiler detection --------------------------------------------------
+# IS_MSVC_LIKE: native MSVC *or* clang-cl (both use MSVC ABI / flags)
+if(MSVC)
+    set(IS_MSVC_LIKE TRUE)
+endif()
+# IS_CLANG_CL: specifically clang-cl (supports extra -W flags that MSVC ignores)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    set(IS_CLANG_CL TRUE)
+endif()
+
+# ---- SDK paths -----------------------------------------------------------
+set(SDK_DIR ${CMAKE_SOURCE_DIR}/SDK)
+
+# pfc sources (all compile safely under _WIN32)
+# pfc-fb2k-hooks.cpp provides stub crash/error hooks for standalone use;
+# when building a fb2k component, foobar2000/SDK/utility.cpp already provides
+# them — include both causes duplicate symbol errors at link time.
+file(GLOB SDK_PFC_SRCS  "${SDK_DIR}/pfc/*.cpp")
+list(FILTER SDK_PFC_SRCS EXCLUDE REGEX ".*pfc-fb2k-hooks\\.cpp$")
+
+# fb2k SDK sources (exclude Apple .mm files)
+file(GLOB SDK_FB2K_ALL  "${SDK_DIR}/foobar2000/SDK/*.cpp")
+list(FILTER SDK_FB2K_ALL EXCLUDE REGEX ".*\\.mm$")
+
+set(SDK_CLIENT_SRC
+    "${SDK_DIR}/foobar2000/foobar2000_component_client/component_client.cpp")
+
+# ---- Plugin sources ------------------------------------------------------
+set(PLUGIN_SRCS
+    src/main.cpp
+    src/qobuz_api.cpp
+    src/qobuz_filesystem.cpp
+    src/qobuz_search.cpp
+    src/foo_qobuz.rc
+)
+
+add_library(foo_qobuz SHARED
+    ${SDK_PFC_SRCS}
+    ${SDK_FB2K_ALL}
+    ${SDK_CLIENT_SRC}
+    ${PLUGIN_SRCS}
+)
+
+# ---- Include directories -------------------------------------------------
+# On Linux cross-compile the file-system is case-sensitive; case-shim dirs with
+# symlinks to Windows SDK headers are added via /imsvc in the toolchain file.
+# On native Windows the FS is case-insensitive so no shims are needed here.
+target_include_directories(foo_qobuz PRIVATE
+    ${SDK_DIR}                          # for <pfc/...>
+    ${SDK_DIR}/foobar2000               # for <SDK/...> and <helpers/...>
+    ${CMAKE_SOURCE_DIR}/src             # for resource.h, stdafx.h
+    ${CMAKE_SOURCE_DIR}/third_party     # for <nlohmann/json.hpp>
+)
+
+# ---- Compiler flags ------------------------------------------------------
+if(IS_MSVC_LIKE)
+    target_compile_options(foo_qobuz PRIVATE /O2 /W1 /wd4996)
+    if(IS_CLANG_CL)
+        # clang-cl accepts GCC-style warning suppression flags; native MSVC does not
+        target_compile_options(foo_qobuz PRIVATE
+            -Wno-ignored-pragma-intrinsic
+            -Wno-unknown-pragmas
+            -Wno-unused-parameter
+            -Wno-microsoft-cast
+        )
+    endif()
+else()
+    # MinGW / GCC cross-compile
+    target_compile_options(foo_qobuz PRIVATE
+        -O2
+        -Wall
+        -Wno-unknown-pragmas
+        -Wno-unused-parameter
+        -Wno-missing-field-initializers
+        -Wno-register
+    )
+endif()
+
+# ---- Per-file flags (audio_math.cpp uses AVX/SSE intrinsics) -------------
+if(IS_MSVC_LIKE)
+    set_source_files_properties(${SDK_DIR}/pfc/audio_math.cpp PROPERTIES
+        COMPILE_FLAGS "/arch:AVX")
+else()
+    set_source_files_properties(${SDK_DIR}/pfc/audio_math.cpp PROPERTIES
+        COMPILE_FLAGS "-mavx -msse4.1 -mssse3")
+endif()
+
+# ---- Link libraries ------------------------------------------------------
+if(IS_MSVC_LIKE)
+    target_link_libraries(foo_qobuz PRIVATE
+        wininet.lib comctl32.lib comdlg32.lib shell32.lib ole32.lib
+        uuid.lib shlwapi.lib winmm.lib
+        # shared.dll import library — provides SHARED_EXPORT functions (uCharLower, etc.)
+        "${SDK_DIR}/foobar2000/shared/shared-x64.lib"
+    )
+    target_link_options(foo_qobuz PRIVATE /DLL)
+else()
+    target_link_libraries(foo_qobuz PRIVATE
+        wininet comctl32 comdlg32 shell32 ole32 uuid shlwapi winmm
+    )
+    target_link_options(foo_qobuz PRIVATE
+        -static-libgcc -static-libstdc++ -static -lwinpthread
+    )
+endif()
+
+# Output name must match VALIDATE_COMPONENT_FILENAME
+set_target_properties(foo_qobuz PROPERTIES
+    OUTPUT_NAME "foo_qobuz"
+    PREFIX      ""
+    SUFFIX      ".dll"
+)
