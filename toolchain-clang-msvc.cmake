@@ -14,7 +14,7 @@ set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
 if(NOT DEFINED XWIN_DIR OR XWIN_DIR STREQUAL "")
-    set(XWIN_DIR "$ENV{HOME}/xwin")
+    set(XWIN_DIR "${_REPO_DIR}/.deps/xwin")
 endif()
 
 set(CMAKE_C_COMPILER   clang-cl)

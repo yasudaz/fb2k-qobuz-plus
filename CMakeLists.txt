@@ -29,7 +29,7 @@ endif()
 #                          through xwin. See: https://visualstudio.microsoft.com/license-terms/vs2022-clt-build-tools/
 #
 if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    set(XWIN_DIR "$ENV{HOME}/xwin" CACHE PATH
+    set(XWIN_DIR "${CMAKE_SOURCE_DIR}/.deps/xwin" CACHE PATH
         "Path to xwin splatted MSVC headers and Windows SDK libs")
     option(XWIN_AUTO_DOWNLOAD
         "Automatically download missing Windows SDK headers/libs via xwin" ON)
@@ -65,7 +65,7 @@ if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
             COMMAND "${XWIN_EXECUTABLE}"
                 --accept-license
                 --arch x86 --arch x86_64
-                --cache-dir "$ENV{HOME}/.xwin-cache"
+                --cache-dir "${CMAKE_SOURCE_DIR}/.deps/xwin-cache"
                 splat --output "${XWIN_DIR}"
             RESULT_VARIABLE _XWIN_RESULT
         )
