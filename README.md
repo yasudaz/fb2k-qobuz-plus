@@ -11,6 +11,9 @@ Streams music from [Qobuz](https://www.qobuz.com/) directly inside foobar2000.
 - **Album art** extraction
 - **Preferences page** at *File → Preferences → Tools → Qobuz*
 - Tracks are stored as `qobuz://track/<id>` URIs and work in saved playlists
+- **Direct URL support** — paste or drag a Qobuz share URL to play it immediately:
+  - Track URLs: `https://open.qobuz.com/track/<id>`
+  - Playlist URLs: `https://play.qobuz.com/playlist/<id>`, `https://open.qobuz.com/playlist/<id>`, `https://www.qobuz.com/<locale>/playlists/<slug>/<id>`
 
 ## Requirements
 
