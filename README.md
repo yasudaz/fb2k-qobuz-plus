@@ -166,4 +166,7 @@ The `FB2K_COMPONENT_EXTRA_DLL` variable is optional — if omitted, the package 
 
 ## License
 
-This project is provided as-is without warranty. Qobuz is a registered trademark of Xandrie SA.
+This project is licensed under the **GNU General Public License v3.0 or later**
+(SPDX: `GPL-3.0-or-later`). See [LICENSE](LICENSE) for the full text.
+
+Qobuz is a registered trademark of Xandrie SA. This project is not affiliated with or endorsed by Qobuz.

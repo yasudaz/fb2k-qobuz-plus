@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Carl Kittelberger <icedream@icedream.pw>
+
 #include "stdafx.h"
 #include "qobuz_api.h"
 #include "resource.h"
