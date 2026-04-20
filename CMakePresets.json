@@ -13,6 +13,17 @@
       }
     },
     {
+      "name": "windows-msvc-x86",
+      "displayName": "Windows (MSVC x86)",
+      "description": "Native Windows 32-bit build with MSVC",
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "Win32", "strategy": "set" },
+      "binaryDir": "${sourceDir}/build-msvc-x86",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
       "name": "windows-clang-cl",
       "displayName": "Windows (clang-cl x64)",
       "description": "Native Windows build with clang-cl",
@@ -22,6 +33,20 @@
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER": "clang-cl",
         "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
+      "name": "windows-clang-cl-x86",
+      "displayName": "Windows (clang-cl x86)",
+      "description": "Native Windows 32-bit build with clang-cl (run from a 32-bit VS developer prompt or set --target i686-pc-windows-msvc)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-clang-win-x86",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_C_FLAGS": "--target i686-pc-windows-msvc",
+        "CMAKE_CXX_FLAGS": "--target i686-pc-windows-msvc"
       }
     },
     {

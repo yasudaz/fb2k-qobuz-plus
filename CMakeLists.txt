@@ -288,3 +288,32 @@ set_target_properties(foo_qobuz PROPERTIES
     PREFIX      ""
     SUFFIX      ".dll"
 )
+
+# ---- .fb2k-component packaging -------------------------------------------
+# A .fb2k-component is a ZIP archive with:
+#   foo_qobuz.dll        <- 32-bit (Win32) DLL at the archive root
+#   x64/foo_qobuz.dll   <- 64-bit DLL under x64/
+#
+# Build both architectures first, then run one of them with:
+#   cmake --build <build-dir> --target foo_qobuz_component \
+#         -DFB2K_COMPONENT_EXTRA_DLL=<path-to-other-arch-dll>
+#
+# Options:
+#   FB2K_COMPONENT_EXTRA_DLL - Path to the other-architecture DLL.
+#                              For a 64-bit build, provide the 32-bit DLL here.
+#                              For a 32-bit build, provide the 64-bit DLL here.
+#                              If omitted, the package contains only one arch.
+set(FB2K_COMPONENT_EXTRA_DLL "" CACHE FILEPATH
+    "Path to the other-architecture foo_qobuz.dll to bundle in the .fb2k-component")
+
+add_custom_target(foo_qobuz_component
+    COMMAND "${CMAKE_COMMAND}"
+        "-DFOO_DLL=$<TARGET_FILE:foo_qobuz>"
+        "-DOUTPUT=${CMAKE_BINARY_DIR}/foo_qobuz.fb2k-component"
+        "-DARCH_X86=${TARGET_ARCH_X86}"
+        "-DEXTRA_DLL=${FB2K_COMPONENT_EXTRA_DLL}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/package_component.cmake"
+    DEPENDS foo_qobuz
+    COMMENT "Packaging foo_qobuz.fb2k-component"
+    VERBATIM
+)
