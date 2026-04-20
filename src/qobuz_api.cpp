@@ -138,7 +138,9 @@ pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id,
             format_id, track_id, unix_ts, sec.c_str());
 
         auto md5res = hasher_md5::get()->process_single_string(sig_input);
-        pfc::string8 sig_hex = md5res.asString();
+        // Qobuz requires lowercase hex for request_sig; asString() returns uppercase
+        pfc::string8 sig_hex = pfc::format_hexdump_lowercase(
+            md5res.m_data, sizeof(md5res.m_data), "");
 
         pfc::string8 url;
         url << "https://www.qobuz.com/api.json/0.2/track/getFileUrl"
