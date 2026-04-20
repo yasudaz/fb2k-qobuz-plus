@@ -51,6 +51,7 @@ public:
     std::vector<QobuzTrack> search_tracks(const char* query, int limit, abort_callback& abort);
     std::vector<QobuzAlbum> search_albums(const char* query, int limit, abort_callback& abort);
     std::vector<QobuzTrack> get_album_tracks(const char* album_id, abort_callback& abort);
+    std::vector<QobuzTrack> get_playlist_tracks(const char* playlist_id, abort_callback& abort);
 
 private:
     std::string              m_app_id;

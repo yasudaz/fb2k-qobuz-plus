@@ -198,6 +198,7 @@ set(PLUGIN_SRCS
     src/qobuz_api.cpp
     src/qobuz_bundle.cpp
     src/qobuz_input.cpp
+    src/qobuz_playlist_loader.cpp
     src/qobuz_prefs.cpp
     src/qobuz_search.cpp
     src/foo_qobuz.rc

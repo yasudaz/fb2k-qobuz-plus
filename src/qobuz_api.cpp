@@ -510,3 +510,39 @@ std::vector<QobuzTrack> QobuzAPI::get_album_tracks(const char* album_id,
     }
     return out;
 }
+
+std::vector<QobuzTrack> QobuzAPI::get_playlist_tracks(const char* playlist_id,
+                                                        abort_callback& abort) {
+    ensure_initialized(abort);
+
+    std::vector<QobuzTrack> out;
+    int offset = 0;
+    static constexpr int page_size = 500;
+
+    for (;;) {
+        std::string url =
+            std::string("https://www.qobuz.com/api.json/0.2/playlist/get")
+            + "?playlist_id=" + playlist_id
+            + "&extra=tracks"
+            + "&limit="  + std::to_string(page_size)
+            + "&offset=" + std::to_string(offset)
+            + "&app_id=" + m_app_id;
+
+        auto j = json::parse(do_get(url.c_str(), abort));
+        if (!j.contains("tracks") || !j["tracks"].contains("items")) break;
+
+        const auto& items = j["tracks"]["items"];
+        for (auto& t : items) {
+            if (t.is_null()) continue;
+            out.push_back(track_from_json(t));
+        }
+
+        // Paginate until we've received all tracks
+        int total = 0;
+        if (j["tracks"].contains("total") && j["tracks"]["total"].is_number())
+            total = j["tracks"]["total"].get<int>();
+        offset += (int)items.size();
+        if (offset >= total || items.empty()) break;
+    }
+    return out;
+}
