@@ -17,12 +17,43 @@
 //
 // Because the inner decoder is opened on an HTTPS CDN URL there is no recursion.
 
+// ---- URL helpers -----------------------------------------------------------
+
+static constexpr const char* k_qobuz_uri_prefix  = "qobuz://track/";
+static constexpr const char* k_qobuz_web_prefix   = "https://open.qobuz.com/track/";
+
+static bool is_qobuz_track_url(const char* path) {
+    return pfc::string_has_prefix(path, k_qobuz_uri_prefix) ||
+           pfc::string_has_prefix(path, k_qobuz_web_prefix);
+}
+
+// Extract the numeric track ID from either URL form.
+// Strips any trailing query string (?) or fragment (#).
+static pfc::string8 extract_track_id(const char* path) {
+    const char* prefix = nullptr;
+    if (pfc::string_has_prefix(path, k_qobuz_uri_prefix))
+        prefix = k_qobuz_uri_prefix;
+    else if (pfc::string_has_prefix(path, k_qobuz_web_prefix))
+        prefix = k_qobuz_web_prefix;
+    else
+        throw exception_io_data("Unrecognised Qobuz track URL");
+
+    const char* id_start = path + std::strlen(prefix);
+    // Find end of ID: stop at '/', '?', '#', or '\0'
+    const char* id_end = id_start;
+    while (*id_end && *id_end != '/' && *id_end != '?' && *id_end != '#')
+        ++id_end;
+    if (id_end == id_start)
+        throw exception_io_data("Empty track ID in Qobuz URL");
+    return pfc::string8(id_start, id_end - id_start);
+}
+
 class qobuz_input_impl : public input_stubs {
 public:
     // ---- static entry-point methods -----------------------------------------
 
     static bool g_is_our_path(const char* p_path, const char* /*p_ext*/) {
-        return pfc::string_has_prefix(p_path, "qobuz://track/");
+        return is_qobuz_track_url(p_path);
     }
 
     static bool g_is_our_content_type(const char* /*p_type*/) { return false; }
@@ -44,7 +75,7 @@ public:
               t_input_open_reason /*p_reason*/, abort_callback& p_abort)
     {
         m_path     = p_path;
-        m_track_id = parse_track_id(p_path);
+        m_track_id = extract_track_id(p_path);
 
         // Fetch full metadata so get_info() works regardless of whether
         // decode_initialize() is ever called (e.g., properties dialog).
@@ -152,14 +183,6 @@ public:
     }
 
 private:
-    static pfc::string8 parse_track_id(const char* path) {
-        const char* prefix = "qobuz://track/";
-        const size_t prefix_len = std::strlen(prefix);
-        if (std::strncmp(path, prefix, prefix_len) != 0)
-            throw exception_io_data("Invalid qobuz:// URI");
-        return pfc::string8(path + prefix_len);
-    }
-
     pfc::string8                  m_path;
     pfc::string8                  m_track_id;
     QobuzTrack                    m_track;
@@ -173,19 +196,14 @@ static input_singletrack_factory_t<qobuz_input_impl> g_qobuz_input_factory;
 class qobuz_album_art_extractor : public album_art_extractor {
 public:
     bool is_our_path(const char* p_path, const char* /*p_extension*/) override {
-        return pfc::string_has_prefix(p_path, "qobuz://track/");
+        return is_qobuz_track_url(p_path);
     }
 
     album_art_extractor_instance_ptr open(file_ptr /*p_filehint*/,
                                           const char* p_path,
                                           abort_callback& p_abort) override
     {
-        const char* prefix = "qobuz://track/";
-        const size_t prefix_len = std::strlen(prefix);
-        if (std::strncmp(p_path, prefix, prefix_len) != 0)
-            throw exception_album_art_not_found();
-
-        pfc::string8 track_id(p_path + prefix_len);
+        pfc::string8 track_id = extract_track_id(p_path);
         QobuzTrack track = g_qobuz_api.get_track_info(track_id.c_str(), p_abort);
 
         if (track.cover_url.empty())
