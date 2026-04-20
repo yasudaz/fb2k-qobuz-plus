@@ -1,14 +1,14 @@
 #include "stdafx.h"
 #include "qobuz_api.h"
+#include "qobuz_bundle.h"
 #include <nlohmann/json.hpp>
 #include <ctime>
-#include <cstring>
+#include <stdexcept>
 
 using json = nlohmann::json;
 
 // ---- advconfig settings --------------------------------------------------
 
-// GUIDs for settings storage – generated once, never change.
 static constexpr GUID guid_advcfg_branch =
     { 0x3d8f2a4e, 0x5b1c, 0x4f7d, { 0xa6, 0x2e, 0x8c, 0x9f, 0x3b, 0x4e, 0x7a, 0x16 } };
 static constexpr GUID guid_cfg_auth_token =
@@ -27,109 +27,169 @@ advconfig_string_factory g_cfg_auth_token(
     "User Auth Token",
     "foo_qobuz.auth_token", guid_cfg_auth_token, guid_advcfg_branch, 0, "");
 
+// These two are optional: leave blank to auto-fetch from play.qobuz.com bundle.
 advconfig_string_factory g_cfg_app_id(
-    "App ID",
+    "App ID (leave blank to auto-fetch)",
     "foo_qobuz.app_id", guid_cfg_app_id, guid_advcfg_branch, 1, "");
 
 advconfig_string_factory g_cfg_secret(
-    "App Secret",
+    "App Secret (leave blank to auto-fetch)",
     "foo_qobuz.secret", guid_cfg_secret, guid_advcfg_branch, 2, "");
 
-// Quality IDs: 5=MP3 320, 6=FLAC 16-bit, 7=FLAC 24-bit ≤96kHz, 27=FLAC 24-bit >96kHz
 advconfig_integer_factory g_cfg_quality(
     "Quality (5=MP3, 6=FLAC 16-bit, 7=FLAC 24-bit, 27=FLAC Hi-Res)",
     "foo_qobuz.quality", guid_cfg_quality, guid_advcfg_branch, 3,
-    27 /*default*/, 5 /*min*/, 27 /*max*/);
+    27, 5, 27);
 
-// Expose these for the filesystem and search to read.
-advconfig_string_factory& cfg_auth_token() { return g_cfg_auth_token; }
-advconfig_string_factory& cfg_app_id()     { return g_cfg_app_id; }
-advconfig_string_factory& cfg_secret()     { return g_cfg_secret; }
-advconfig_integer_factory& cfg_quality()   { return g_cfg_quality; }
+advconfig_string_factory&  cfg_auth_token() { return g_cfg_auth_token; }
+advconfig_string_factory&  cfg_app_id()     { return g_cfg_app_id; }
+advconfig_string_factory&  cfg_secret()     { return g_cfg_secret; }
+advconfig_integer_factory& cfg_quality()    { return g_cfg_quality; }
 
-// ---- QobuzAPI implementation ---------------------------------------------
+// ---- QobuzAPI ---------------------------------------------------------------
 
 QobuzAPI g_qobuz_api;
 
 void QobuzAPI::add_auth_headers(http_request::ptr& req) {
-    pfc::string8 app_id, auth_token;
-    g_cfg_app_id.get(app_id);
+    pfc::string8 auth_token;
     g_cfg_auth_token.get(auth_token);
-    req->add_header("X-App-Id",          app_id.c_str());
+    req->add_header("X-App-Id",          m_app_id.c_str());
     req->add_header("X-User-Auth-Token", auth_token.c_str());
     req->add_header("User-Agent",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0");
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 }
 
 std::string QobuzAPI::do_get(const char* url, abort_callback& abort) {
     auto req = http_client::get()->create_request("GET");
     add_auth_headers(req);
-
     auto resp = req->run(url, abort);
-
     std::string body;
     char buf[8192];
     for (;;) {
         size_t got = resp->read(buf, sizeof(buf), abort);
-        if (got == 0) break;
+        if (!got) break;
         body.append(buf, got);
     }
     return body;
 }
 
-pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id, abort_callback& abort) {
-    pfc::string8 secret_val, app_id_val, auth_token_val;
-    g_cfg_secret.get(secret_val);
-    if (secret_val.is_empty())
-        throw std::runtime_error("Qobuz app secret is not configured");
+void QobuzAPI::ensure_initialized(abort_callback& abort) {
+    std::lock_guard<std::mutex> lock(m_init_mutex);
+    if (m_initialized) return;
 
-    g_cfg_app_id.get(app_id_val);
-    if (app_id_val.is_empty())
-        throw std::runtime_error("Qobuz app ID is not configured");
+    pfc::string8 auth_token;
+    g_cfg_auth_token.get(auth_token);
+    if (auth_token.is_empty())
+        throw std::runtime_error(
+            "Qobuz auth token is not configured. "
+            "Go to File > Preferences > Advanced > Tools > Qobuz.");
 
-    g_cfg_auth_token.get(auth_token_val);
-    if (auth_token_val.is_empty())
-        throw std::runtime_error("Qobuz auth token is not configured");
+    // Check for manual override: if BOTH app_id and secret are set, use them.
+    pfc::string8 manual_app_id, manual_secret;
+    g_cfg_app_id.get(manual_app_id);
+    g_cfg_secret.get(manual_secret);
 
-    long unix_ts = (long)std::time(nullptr);
+    if (!manual_app_id.is_empty() && !manual_secret.is_empty()) {
+        m_app_id  = manual_app_id.c_str();
+        m_secrets = { std::string(manual_secret.c_str()) };
+        m_initialized = true;
+        return;
+    }
 
-    // Signature string: trackgetFileUrlformat_id{fmt}intentstreamtrack_id{id}{ts}{secret}
-    char sig_input[2048];
-    std::snprintf(sig_input, sizeof(sig_input),
-        "trackgetFileUrlformat_id%dintentstream"
-        "track_id%s%ld%s",
-        format_id, track_id, unix_ts, secret_val.c_str());
+    // Auto-fetch from the Qobuz web-player bundle.
+    try {
+        BundleCredentials creds = fetch_bundle_credentials(abort);
+        m_app_id  = creds.app_id;
+        m_secrets = creds.secrets;
+        m_initialized = true;
+    } catch (std::exception const& e) {
+        // Bundle fetch failed: fall back to whatever advconfig has.
+        if (!manual_app_id.is_empty()) m_app_id = manual_app_id.c_str();
+        if (!manual_secret.is_empty()) m_secrets = { std::string(manual_secret.c_str()) };
 
-    // Compute MD5 hex string
-    auto md5svc  = hasher_md5::get();
-    auto md5res  = md5svc->process_single_string(sig_input);
-    pfc::string8 sig_hex = md5res.asString();
-
-    pfc::string8 url;
-    url << "https://www.qobuz.com/api.json/0.2/track/getFileUrl"
-        << "?track_id="    << track_id
-        << "&format_id="   << format_id
-        << "&intent=stream"
-        << "&request_ts="  << unix_ts
-        << "&request_sig=" << sig_hex;
-
-    auto body = do_get(url, abort);
-    if (body.empty())
-        throw std::runtime_error("Empty response from Qobuz track/getFileUrl");
-
-    auto j = json::parse(body);
-    if (!j.contains("url"))
-        throw std::runtime_error("No URL in Qobuz track/getFileUrl response");
-
-    return pfc::string8(j["url"].get<std::string>().c_str());
+        if (m_app_id.empty() || m_secrets.empty()) {
+            throw std::runtime_error(
+                std::string("Failed to fetch Qobuz credentials from bundle: ") + e.what() +
+                "\nYou can set App ID and Secret manually in "
+                "Advanced > Tools > Qobuz as a fallback.");
+        }
+        m_initialized = true;
+    }
 }
 
-// Helper: safely extract a string field from a json object, returning "" on missing/null.
+pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id,
+                                      abort_callback& abort) {
+    ensure_initialized(abort);
+
+    // Build the ordered list of secrets to try: cached winner first, then rest.
+    std::vector<std::string> to_try;
+    if (!m_secret.empty()) to_try.push_back(m_secret);
+    for (auto& s : m_secrets)
+        if (s != m_secret) to_try.push_back(s);
+
+    std::string last_error = "no secrets available";
+
+    for (auto& sec : to_try) {
+        long unix_ts = (long)std::time(nullptr);
+
+        char sig_input[2048];
+        std::snprintf(sig_input, sizeof(sig_input),
+            "trackgetFileUrlformat_id%dintentstreamtrack_id%s%ld%s",
+            format_id, track_id, unix_ts, sec.c_str());
+
+        auto md5res = hasher_md5::get()->process_single_string(sig_input);
+        pfc::string8 sig_hex = md5res.asString();
+
+        pfc::string8 url;
+        url << "https://www.qobuz.com/api.json/0.2/track/getFileUrl"
+            << "?track_id="    << track_id
+            << "&format_id="   << format_id
+            << "&intent=stream"
+            << "&request_ts="  << unix_ts
+            << "&request_sig=" << sig_hex;
+
+        try {
+            auto body = do_get(url, abort);
+            if (body.empty()) { last_error = "empty response"; continue; }
+
+            auto j = json::parse(body);
+
+            // Error JSON (wrong secret → 400, or rights issue → error in body)
+            if (j.contains("status") && j["status"].is_string() &&
+                j["status"].get<std::string>() == "error") {
+                last_error = j.value("message", "API error");
+                continue;   // try next secret
+            }
+
+            if (!j.contains("url")) {
+                last_error = "no URL in response: " + body.substr(0, 200);
+                continue;
+            }
+
+            m_secret = sec;  // cache the working secret
+            return pfc::string8(j["url"].get<std::string>().c_str());
+
+        } catch (std::exception const& e) {
+            last_error = e.what();
+            // network error or JSON parse failure — try next secret
+        }
+    }
+
+    // All secrets exhausted — reset so the next call re-fetches from bundle.
+    {
+        std::lock_guard<std::mutex> lk(m_init_mutex);
+        m_initialized = false;
+        m_secret.clear();
+    }
+    throw std::runtime_error("Qobuz: could not get stream URL (" + last_error + ")");
+}
+
+// ---- helpers ----------------------------------------------------------------
+
 static std::string jstr(const json& obj, const char* key) {
     auto it = obj.find(key);
     if (it == obj.end() || it->is_null()) return {};
-    if (it->is_string()) return it->get<std::string>();
-    return {};
+    return it->is_string() ? it->get<std::string>() : std::string{};
 }
 
 static std::string jstr_nested(const json& obj, const char* outer, const char* inner) {
@@ -141,58 +201,64 @@ static std::string jstr_nested(const json& obj, const char* outer, const char* i
 static QobuzTrack track_from_json(const json& t) {
     QobuzTrack tr;
     if (t.contains("id") && !t["id"].is_null()) {
-        if (t["id"].is_string())      tr.id = t["id"].get<std::string>();
+        if      (t["id"].is_string()) tr.id = t["id"].get<std::string>();
         else if (t["id"].is_number()) tr.id = std::to_string(t["id"].get<long long>());
     }
-    tr.title         = jstr(t, "title");
-    tr.artist        = jstr_nested(t, "performer", "name");
+    tr.title  = jstr(t, "title");
+    tr.artist = jstr_nested(t, "performer", "name");
     if (tr.artist.empty()) tr.artist = jstr_nested(t, "artist", "name");
-    tr.album         = jstr_nested(t, "album", "title");
-    tr.album_id      = jstr_nested(t, "album", "id");
-    if (t.contains("duration")             && t["duration"].is_number())
-        tr.duration      = t["duration"].get<double>();
-    if (t.contains("maximum_bit_depth")    && t["maximum_bit_depth"].is_number())
-        tr.bit_depth     = t["maximum_bit_depth"].get<int>();
-    if (t.contains("maximum_sampling_rate") && t["maximum_sampling_rate"].is_number())
+    tr.album    = jstr_nested(t, "album", "title");
+    tr.album_id = jstr_nested(t, "album", "id");
+    if (t.contains("duration")               && t["duration"].is_number())
+        tr.duration = t["duration"].get<double>();
+    if (t.contains("maximum_bit_depth")      && t["maximum_bit_depth"].is_number())
+        tr.bit_depth = t["maximum_bit_depth"].get<int>();
+    if (t.contains("maximum_sampling_rate")  && t["maximum_sampling_rate"].is_number())
         tr.sampling_rate = t["maximum_sampling_rate"].get<double>();
     return tr;
 }
 
-std::vector<QobuzTrack> QobuzAPI::search_tracks(const char* query, int limit, abort_callback& abort) {
-    pfc::string8 encoded_query;
-    pfc::urlEncode(encoded_query, query);
+// ---- search -----------------------------------------------------------------
+
+std::vector<QobuzTrack> QobuzAPI::search_tracks(const char* query, int limit,
+                                                  abort_callback& abort) {
+    ensure_initialized(abort);
+    pfc::string8 encoded;
+    pfc::urlEncode(encoded, query);
 
     pfc::string8 url;
-    url << "https://www.qobuz.com/api.json/0.2/track/search"
-        << "?query="  << encoded_query
-        << "&limit="  << limit;
+    url << "https://www.qobuz.com/api.json/0.2/catalog/search"
+        << "?query="  << encoded
+        << "&type=tracks"
+        << "&limit="  << limit
+        << "&app_id=" << m_app_id.c_str()
+        << "&lang=en&locale=en_US";
 
-    auto body = do_get(url, abort);
-    auto j = json::parse(body);
-
-    std::vector<QobuzTrack> results;
-    if (!j.contains("tracks") || !j["tracks"].contains("items")) return results;
-    for (auto& t : j["tracks"]["items"]) {
-        if (t.is_null()) continue;
-        results.push_back(track_from_json(t));
-    }
-    return results;
+    auto j = json::parse(do_get(url, abort));
+    std::vector<QobuzTrack> out;
+    if (!j.contains("tracks") || !j["tracks"].contains("items")) return out;
+    for (auto& t : j["tracks"]["items"])
+        if (!t.is_null()) out.push_back(track_from_json(t));
+    return out;
 }
 
-std::vector<QobuzAlbum> QobuzAPI::search_albums(const char* query, int limit, abort_callback& abort) {
-    pfc::string8 encoded_query;
-    pfc::urlEncode(encoded_query, query);
+std::vector<QobuzAlbum> QobuzAPI::search_albums(const char* query, int limit,
+                                                   abort_callback& abort) {
+    ensure_initialized(abort);
+    pfc::string8 encoded;
+    pfc::urlEncode(encoded, query);
 
     pfc::string8 url;
-    url << "https://www.qobuz.com/api.json/0.2/album/search"
-        << "?query=" << encoded_query
-        << "&limit=" << limit;
+    url << "https://www.qobuz.com/api.json/0.2/catalog/search"
+        << "?query="  << encoded
+        << "&type=albums"
+        << "&limit="  << limit
+        << "&app_id=" << m_app_id.c_str()
+        << "&lang=en&locale=en_US";
 
-    auto body = do_get(url, abort);
-    auto j = json::parse(body);
-
-    std::vector<QobuzAlbum> results;
-    if (!j.contains("albums") || !j["albums"].contains("items")) return results;
+    auto j = json::parse(do_get(url, abort));
+    std::vector<QobuzAlbum> out;
+    if (!j.contains("albums") || !j["albums"].contains("items")) return out;
     for (auto& a : j["albums"]["items"]) {
         if (a.is_null()) continue;
         QobuzAlbum al;
@@ -203,23 +269,25 @@ std::vector<QobuzAlbum> QobuzAPI::search_albums(const char* query, int limit, ab
             al.tracks_count = a["tracks_count"].get<int>();
         if (a.contains("released_at") && a["released_at"].is_number())
             al.year = (int)(a["released_at"].get<long long>() / 31536000L + 1970);
-        results.push_back(al);
+        out.push_back(al);
     }
-    return results;
+    return out;
 }
 
-std::vector<QobuzTrack> QobuzAPI::get_album_tracks(const char* album_id, abort_callback& abort) {
+std::vector<QobuzTrack> QobuzAPI::get_album_tracks(const char* album_id,
+                                                     abort_callback& abort) {
+    ensure_initialized(abort);
+
     pfc::string8 url;
     url << "https://www.qobuz.com/api.json/0.2/album/get"
-        << "?album_id=" << album_id;
+        << "?album_id=" << album_id
+        << "&app_id="   << m_app_id.c_str()
+        << "&lang=en&locale=en_US";
 
-    auto body = do_get(url, abort);
-    auto j = json::parse(body);
+    auto j = json::parse(do_get(url, abort));
+    std::vector<QobuzTrack> out;
+    if (!j.contains("tracks") || !j["tracks"].contains("items")) return out;
 
-    std::vector<QobuzTrack> results;
-    if (!j.contains("tracks") || !j["tracks"].contains("items")) return results;
-
-    // Top-level album fields for filling in track details
     std::string album_title  = jstr(j, "title");
     std::string album_artist = jstr_nested(j, "artist", "name");
 
@@ -229,7 +297,7 @@ std::vector<QobuzTrack> QobuzAPI::get_album_tracks(const char* album_id, abort_c
         if (tr.album.empty())  tr.album  = album_title;
         if (tr.artist.empty()) tr.artist = album_artist;
         tr.album_id = album_id;
-        results.push_back(tr);
+        out.push_back(tr);
     }
-    return results;
+    return out;
 }
