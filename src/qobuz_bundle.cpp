@@ -10,17 +10,28 @@
 // ---- helpers ----------------------------------------------------------------
 
 // Fetch a URL with a plain GET; returns body as a string.
-static std::string simple_get(const char* url, abort_callback& abort) {
+// If max_bytes > 0, adds a Range header so the server only sends that many bytes.
+static std::string simple_get(const char* url, abort_callback& abort,
+                               size_t max_bytes = 0) {
     auto req = http_client::get()->create_request("GET");
     req->add_header("User-Agent",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+    if (max_bytes > 0) {
+        // Range: bytes=0-N causes the server to send exactly those bytes and
+        // then close the connection, preventing an infinite read loop on large files.
+        char range_hdr[64];
+        std::snprintf(range_hdr, sizeof(range_hdr), "bytes=0-%zu", max_bytes - 1);
+        req->add_header("Range", range_hdr);
+    }
     auto resp = req->run(url, abort);
 
     std::string body;
-    body.reserve(65536);
+    body.reserve(max_bytes > 0 ? max_bytes : 65536);
     char buf[65536];
     for (;;) {
-        size_t got = resp->read(buf, sizeof(buf), abort);
+        size_t want = sizeof(buf);
+        if (max_bytes > 0 && body.size() >= max_bytes) break;
+        size_t got = resp->read(buf, want, abort);
         if (!got) break;
         body.append(buf, got);
     }
