@@ -1,0 +1,26 @@
+#include "resource.h"
+
+IDD_QOBUZ_SEARCH DIALOGEX 0, 0, 480, 300
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
+CAPTION "Qobuz Search"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Search:", -1, 7, 9, 30, 8
+    EDITTEXT        IDC_SEARCH_EDIT, 38, 7, 350, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Search", IDC_SEARCH_BTN, 393, 7, 80, 14, WS_TABSTOP
+
+    CONTROL         "Tracks", IDC_TYPE_TRACKS, "Button",
+                    BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 7, 27, 40, 10
+    CONTROL         "Albums", IDC_TYPE_ALBUMS, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP, 52, 27, 40, 10
+
+    LTEXT           "", IDC_STATUS_TEXT, 100, 27, 373, 10
+
+    CONTROL         "", IDC_RESULTS_LIST, "SysListView32",
+                    LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP | WS_VSCROLL,
+                    7, 40, 466, 235
+
+    PUSHBUTTON      "Add to Playlist", IDC_ADD_PLAYLIST, 7, 282, 80, 14, WS_TABSTOP
+    PUSHBUTTON      "Play Now", IDC_PLAY_NOW, 92, 282, 60, 14, WS_TABSTOP
+    PUSHBUTTON      "Close", IDC_CLOSE_BTN, 397, 282, 76, 14, WS_TABSTOP
+END

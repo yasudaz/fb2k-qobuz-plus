@@ -1,0 +1,39 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows (MSVC x64)",
+      "description": "Native Windows build with MSVC",
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "binaryDir": "${sourceDir}/build-msvc",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "windows-clang-cl",
+      "displayName": "Windows (clang-cl x64)",
+      "description": "Native Windows build with clang-cl",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-clang-win",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
+      "name": "linux-cross",
+      "displayName": "Linux cross-compile (clang-cl + xwin)",
+      "description": "Cross-compile for Windows from Linux using clang-cl and xwin headers",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-clang",
+      "toolchainFile": "${sourceDir}/toolchain-clang-msvc.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ]
+}

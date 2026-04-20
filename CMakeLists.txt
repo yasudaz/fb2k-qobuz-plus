@@ -31,8 +31,77 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MS
     set(IS_CLANG_CL TRUE)
 endif()
 
-# ---- SDK paths -----------------------------------------------------------
-set(SDK_DIR ${CMAKE_SOURCE_DIR}/SDK)
+# ---- foobar2000 SDK ------------------------------------------------------
+# Options:
+#   FB2K_SDK_DIR      - Path to an already-extracted SDK (skips download).
+#   FB2K_SDK_VERSION  - Version date string (e.g. "2025-03-07") or "latest".
+#                       Ignored when FB2K_SDK_DIR is set. Default: "latest".
+#
+# Downloaded SDKs are cached under <source-root>/.deps/fb2k-sdk/ so they
+# survive build-directory deletion. .deps/ is excluded via .gitignore.
+set(FB2K_SDK_DIR "" CACHE PATH
+    "Path to an existing foobar2000 SDK directory (skips auto-download)")
+set(FB2K_SDK_VERSION "latest" CACHE STRING
+    "foobar2000 SDK version to download: date string (YYYY-MM-DD) or \"latest\"")
+
+if(FB2K_SDK_DIR AND EXISTS "${FB2K_SDK_DIR}/pfc")
+    set(SDK_DIR "${FB2K_SDK_DIR}")
+    message(STATUS "foobar2000 SDK: using user-provided ${SDK_DIR}")
+else()
+    set(_FB2K_DEPS_DIR "${CMAKE_SOURCE_DIR}/.deps/fb2k-sdk")
+
+    # Resolve "latest" by scraping the SDK download page.
+    if(FB2K_SDK_VERSION STREQUAL "latest")
+        set(_FB2K_SDK_PAGE "${_FB2K_DEPS_DIR}/_sdk_page.html")
+        file(DOWNLOAD "https://www.foobar2000.org/SDK" "${_FB2K_SDK_PAGE}"
+            TIMEOUT 30 STATUS _dl_status)
+        list(GET _dl_status 0 _dl_code)
+        if(NOT _dl_code EQUAL 0)
+            message(FATAL_ERROR "Could not fetch foobar2000 SDK page: ${_dl_status}")
+        endif()
+        file(READ "${_FB2K_SDK_PAGE}" _sdk_page_content)
+        string(REGEX MATCH "SDK-([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])\\.7z" _ "${_sdk_page_content}")
+        if(NOT CMAKE_MATCH_1)
+            message(FATAL_ERROR "Could not parse latest foobar2000 SDK version from download page")
+        endif()
+        set(_resolved_version "${CMAKE_MATCH_1}")
+    else()
+        set(_resolved_version "${FB2K_SDK_VERSION}")
+    endif()
+
+    set(_FB2K_SDK_EXTRACT_DIR "${_FB2K_DEPS_DIR}/SDK-${_resolved_version}")
+
+    if(NOT EXISTS "${_FB2K_SDK_EXTRACT_DIR}/pfc")
+        set(_sdk_url "https://www.foobar2000.org/downloads/SDK-${_resolved_version}.7z")
+        set(_sdk_archive "${_FB2K_DEPS_DIR}/SDK-${_resolved_version}.7z")
+        message(STATUS "Downloading foobar2000 SDK ${_resolved_version} from ${_sdk_url} ...")
+        file(MAKE_DIRECTORY "${_FB2K_SDK_EXTRACT_DIR}")
+        file(DOWNLOAD "${_sdk_url}" "${_sdk_archive}"
+            SHOW_PROGRESS TIMEOUT 120 STATUS _dl_status)
+        list(GET _dl_status 0 _dl_code)
+        if(NOT _dl_code EQUAL 0)
+            file(REMOVE_RECURSE "${_FB2K_SDK_EXTRACT_DIR}")
+            message(FATAL_ERROR "Failed to download foobar2000 SDK: ${_dl_status}")
+        endif()
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E tar xf "${_sdk_archive}"
+            WORKING_DIRECTORY "${_FB2K_SDK_EXTRACT_DIR}"
+            RESULT_VARIABLE _extract_result
+        )
+        if(NOT _extract_result EQUAL 0)
+            file(REMOVE_RECURSE "${_FB2K_SDK_EXTRACT_DIR}")
+            message(FATAL_ERROR "Failed to extract foobar2000 SDK archive (exit ${_extract_result})")
+        endif()
+        file(REMOVE "${_sdk_archive}")
+    endif()
+
+    if(NOT EXISTS "${_FB2K_SDK_EXTRACT_DIR}/pfc")
+        message(FATAL_ERROR "Unexpected SDK layout after extraction in ${_FB2K_SDK_EXTRACT_DIR}")
+    endif()
+
+    set(SDK_DIR "${_FB2K_SDK_EXTRACT_DIR}")
+    message(STATUS "foobar2000 SDK: ${_resolved_version} at ${SDK_DIR}")
+endif()
 
 # pfc sources (all compile safely under _WIN32)
 # pfc-fb2k-hooks.cpp provides stub crash/error hooks for standalone use;
