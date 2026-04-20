@@ -4,6 +4,17 @@ project(foo_qobuz CXX RC)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ---- Architecture detection ----------------------------------------------
+# CMAKE_SYSTEM_PROCESSOR is set by the toolchain file (x86_64 or x86).
+# On a native Windows MSVC build, fall back to CMAKE_VS_PLATFORM_NAME or MSVC_CXX_ARCHITECTURE_ID.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86)$" OR
+   CMAKE_VS_PLATFORM_NAME STREQUAL "Win32" OR
+   MSVC_CXX_ARCHITECTURE_ID STREQUAL "X86")
+    set(TARGET_ARCH_X86 TRUE)
+else()
+    set(TARGET_ARCH_X86 FALSE)
+endif()
+
 # ---- Compile definitions -------------------------------------------------
 add_compile_definitions(
     WIN32
@@ -20,6 +31,9 @@ add_compile_definitions(
     _CRT_SECURE_NO_WARNINGS
     _CRT_NONSTDC_NO_WARNINGS
 )
+if(NOT TARGET_ARCH_X86)
+    add_compile_definitions(WIN64 _WIN64)
+endif()
 
 # ---- Compiler detection --------------------------------------------------
 # IS_MSVC_LIKE: native MSVC *or* clang-cl (both use MSVC ABI / flags)
@@ -175,17 +189,27 @@ if(IS_MSVC_LIKE)
     set_source_files_properties(${SDK_DIR}/pfc/audio_math.cpp PROPERTIES
         COMPILE_FLAGS "/arch:AVX")
 else()
-    set_source_files_properties(${SDK_DIR}/pfc/audio_math.cpp PROPERTIES
-        COMPILE_FLAGS "-mavx -msse4.1 -mssse3")
+    if(TARGET_ARCH_X86)
+        set_source_files_properties(${SDK_DIR}/pfc/audio_math.cpp PROPERTIES
+            COMPILE_FLAGS "-mavx -msse4.1 -mssse3 -msse2")
+    else()
+        set_source_files_properties(${SDK_DIR}/pfc/audio_math.cpp PROPERTIES
+            COMPILE_FLAGS "-mavx -msse4.1 -mssse3")
+    endif()
 endif()
 
 # ---- Link libraries ------------------------------------------------------
 if(IS_MSVC_LIKE)
+    if(TARGET_ARCH_X86)
+        set(_FB2K_SHARED_LIB "${SDK_DIR}/foobar2000/shared/shared-Win32.lib")
+    else()
+        set(_FB2K_SHARED_LIB "${SDK_DIR}/foobar2000/shared/shared-x64.lib")
+    endif()
     target_link_libraries(foo_qobuz PRIVATE
         wininet.lib winhttp.lib comctl32.lib comdlg32.lib shell32.lib ole32.lib
         uuid.lib shlwapi.lib winmm.lib
         # shared.dll import library — provides SHARED_EXPORT functions (uCharLower, etc.)
-        "${SDK_DIR}/foobar2000/shared/shared-x64.lib"
+        "${_FB2K_SHARED_LIB}"
     )
     target_link_options(foo_qobuz PRIVATE /DLL)
 else()

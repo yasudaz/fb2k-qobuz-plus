@@ -34,6 +34,17 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "linux-cross-x86",
+      "displayName": "Linux cross-compile (clang-cl + xwin, x86)",
+      "description": "Cross-compile 32-bit Windows DLL from Linux using clang-cl and xwin headers",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-clang-x86",
+      "toolchainFile": "${sourceDir}/toolchain-clang-msvc-x86.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ]
 }
