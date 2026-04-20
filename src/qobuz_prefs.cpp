@@ -125,6 +125,7 @@ private:
         switch (msg) {
         case WM_INITDIALOG:
             self = reinterpret_cast<QobuzPrefsInstance*>(lp);
+            self->m_wnd = hwnd;
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)self);
             self->on_init();
             return TRUE;
