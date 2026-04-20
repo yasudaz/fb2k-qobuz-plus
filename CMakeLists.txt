@@ -122,7 +122,7 @@ set(PLUGIN_SRCS
     src/main.cpp
     src/qobuz_api.cpp
     src/qobuz_bundle.cpp
-    src/qobuz_filesystem.cpp
+    src/qobuz_input.cpp
     src/qobuz_search.cpp
     src/foo_qobuz.rc
 )

@@ -342,6 +342,72 @@ static QobuzTrack track_from_json(const json& t) {
     return tr;
 }
 
+// ---- get_track_info ---------------------------------------------------------
+
+QobuzTrack QobuzAPI::get_track_info(const char* track_id, abort_callback& abort) {
+    ensure_initialized(abort);
+
+    std::string url =
+        std::string("https://www.qobuz.com/api.json/0.2/track/get")
+        + "?track_id=" + track_id
+        + "&app_id="   + m_app_id;
+
+    auto j = json::parse(do_get(url.c_str(), abort));
+
+    QobuzTrack tr;
+    // Identity
+    tr.id = track_id;
+    tr.title   = jstr(j, "title");
+    tr.version = jstr(j, "version");
+    if (!tr.version.empty())
+        tr.title += " (" + tr.version + ")";
+
+    tr.artist       = jstr_nested(j, "performer", "name");
+    tr.composer     = jstr_nested(j, "composer", "name");
+    tr.performers   = jstr(j, "performers");
+    tr.isrc         = jstr(j, "isrc");
+    tr.copyright    = jstr(j, "copyright");
+
+    tr.track_number = jint(j, "track_number");
+    tr.disc_number  = jint(j, "media_number", 1);
+    tr.duration     = jdbl(j, "duration");
+    tr.bit_depth    = jint(j, "maximum_bit_depth", 16);
+    tr.sampling_rate = jdbl(j, "maximum_sampling_rate", 44.1);
+    tr.channels     = jint(j, "maximum_channel_count", 2);
+
+    // Release date
+    tr.date = jstr(j, "release_date_original");
+
+    // ReplayGain
+    if (j.contains("audio_info") && j["audio_info"].is_object()) {
+        const auto& ai = j["audio_info"];
+        if (ai.contains("replaygain_track_gain") && !ai["replaygain_track_gain"].is_null()) {
+            tr.rg_track_gain = jdbl(ai, "replaygain_track_gain");
+            tr.rg_track_peak = jdbl(ai, "replaygain_track_peak", 1.0);
+            tr.has_rg = true;
+        }
+    }
+
+    // Album sub-object
+    if (j.contains("album") && j["album"].is_object()) {
+        const auto& alb = j["album"];
+        tr.album        = jstr(alb, "title");
+        tr.album_id     = jstr(alb, "id");
+        tr.album_artist = jstr_nested(alb, "artist", "name");
+        tr.genre        = jstr_nested(alb, "genre", "name");
+        tr.label        = jstr_nested(alb, "label", "name");
+        tr.upc          = jstr(alb, "upc");
+        tr.total_tracks = jint(alb, "tracks_count");
+        tr.total_discs  = jint(alb, "media_count", 1);
+        if (tr.copyright.empty()) tr.copyright = jstr(alb, "copyright");
+        if (tr.date.empty())      tr.date       = jstr(alb, "release_date_original");
+
+        }
+    }
+
+    return tr;
+}
+
 // ---- search -----------------------------------------------------------------
 
 std::vector<QobuzTrack> QobuzAPI::search_tracks(const char* query, int limit,

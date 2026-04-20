@@ -7,10 +7,31 @@
 #include <vector>
 
 struct QobuzTrack {
+    // Core identity (populated by search results and track/get)
     std::string id, title, artist, album, album_id;
-    double duration = 0.0;
-    int    bit_depth = 16;
-    double sampling_rate = 44.1;
+    double duration       = 0.0;
+    int    bit_depth      = 16;
+    double sampling_rate  = 44.1;
+
+    // Extended metadata (populated by get_track_info() via track/get)
+    std::string version;        // e.g. "Radio Edit"
+    std::string album_artist;
+    std::string date;           // YYYY-MM-DD from release_date_original
+    std::string genre;
+    std::string label;
+    std::string isrc;
+    std::string copyright;
+    std::string upc;
+    std::string composer;
+    std::string performers;     // raw role string from API
+    int         track_number  = 0;
+    int         total_tracks  = 0;
+    int         disc_number   = 1;
+    int         total_discs   = 1;
+    int         channels      = 2;
+    double      rg_track_gain = 0.0;
+    double      rg_track_peak = 1.0;
+    bool        has_rg        = false;
 };
 
 struct QobuzAlbum {
@@ -21,6 +42,7 @@ struct QobuzAlbum {
 class QobuzAPI {
 public:
     pfc::string8 get_track_url(const char* track_id, int format_id, abort_callback& abort);
+    QobuzTrack   get_track_info(const char* track_id, abort_callback& abort);
     std::vector<QobuzTrack> search_tracks(const char* query, int limit, abort_callback& abort);
     std::vector<QobuzAlbum> search_albums(const char* query, int limit, abort_callback& abort);
     std::vector<QobuzTrack> get_album_tracks(const char* album_id, abort_callback& abort);
@@ -34,7 +56,6 @@ private:
 
     void ensure_initialized(abort_callback& abort);
     std::string do_get(const char* url, abort_callback& abort);
-    void add_auth_headers(http_request::ptr& req);
 };
 
 extern QobuzAPI g_qobuz_api;
