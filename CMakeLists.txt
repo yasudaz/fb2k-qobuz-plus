@@ -15,6 +15,67 @@ else()
     set(TARGET_ARCH_X86 FALSE)
 endif()
 
+# ---- xwin auto-download --------------------------------------------------
+# When cross-compiling on Linux, the MSVC headers and Windows SDK libs are
+# provided by xwin. If the expected lib directory is absent, CMake can
+# download and splat them automatically via the `xwin` CLI tool.
+#
+# Options:
+#   XWIN_DIR             - Path where xwin has been splatted (default: ~/xwin).
+#                          Also settable via -DXWIN_DIR= on the cmake command line.
+#   XWIN_AUTO_DOWNLOAD   - Download missing xwin libs automatically (default: ON).
+#   XWIN_ACCEPT_LICENSE  - Must be set to ON to allow auto-download; this implies
+#                          acceptance of the Microsoft Visual C++ license distributed
+#                          through xwin. See: https://visualstudio.microsoft.com/license-terms/vs2022-clt-build-tools/
+#
+if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(XWIN_DIR "$ENV{HOME}/xwin" CACHE PATH
+        "Path to xwin splatted MSVC headers and Windows SDK libs")
+    option(XWIN_AUTO_DOWNLOAD
+        "Automatically download missing Windows SDK headers/libs via xwin" ON)
+    option(XWIN_ACCEPT_LICENSE
+        "Accept the Microsoft Visual C++ license required for xwin auto-download" OFF)
+
+    if(TARGET_ARCH_X86)
+        set(_XWIN_CHECK_ARCH "x86")
+    else()
+        set(_XWIN_CHECK_ARCH "x86_64")
+    endif()
+
+    if(XWIN_AUTO_DOWNLOAD AND NOT EXISTS "${XWIN_DIR}/crt/lib/${_XWIN_CHECK_ARCH}")
+        if(NOT XWIN_ACCEPT_LICENSE)
+            message(FATAL_ERROR
+                "Windows SDK headers not found at XWIN_DIR=${XWIN_DIR} and "
+                "XWIN_ACCEPT_LICENSE is OFF.\n"
+                "To auto-download, review the Microsoft Visual C++ license at:\n"
+                "  https://visualstudio.microsoft.com/license-terms/vs2022-clt-build-tools/\n"
+                "then re-run CMake with -DXWIN_ACCEPT_LICENSE=ON.")
+        endif()
+        find_program(XWIN_EXECUTABLE xwin
+            DOC "xwin tool for downloading and splatting MSVC headers")
+        if(NOT XWIN_EXECUTABLE)
+            message(FATAL_ERROR
+                "xwin not found. Install it from https://github.com/Jake-Shadle/xwin "
+                "or provide pre-splatted headers at XWIN_DIR=${XWIN_DIR}.")
+        endif()
+        message(STATUS "Downloading Windows SDK headers to ${XWIN_DIR} via xwin ...")
+        # Always splat both arches together — xwin replaces the output dir per run,
+        # so separate invocations would overwrite each other.
+        execute_process(
+            COMMAND "${XWIN_EXECUTABLE}"
+                --accept-license
+                --arch x86 --arch x86_64
+                --cache-dir "$ENV{HOME}/.xwin-cache"
+                splat --output "${XWIN_DIR}"
+            RESULT_VARIABLE _XWIN_RESULT
+        )
+        if(NOT _XWIN_RESULT EQUAL 0)
+            message(FATAL_ERROR "xwin exited with code ${_XWIN_RESULT}")
+        endif()
+        message(STATUS "xwin download complete.")
+    endif()
+endif()
+
 # ---- Compile definitions -------------------------------------------------
 add_compile_definitions(
     WIN32

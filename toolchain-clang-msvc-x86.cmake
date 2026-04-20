@@ -3,11 +3,16 @@
 #
 # Usage (from repo root):
 #   cmake -B build-clang-x86 -DCMAKE_TOOLCHAIN_FILE=toolchain-clang-msvc-x86.cmake
+#
+# Override xwin location:
+#   cmake -B build-clang-x86 -DCMAKE_TOOLCHAIN_FILE=toolchain-clang-msvc-x86.cmake -DXWIN_DIR=/path/to/xwin
 
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86)
 
-set(XWIN_DIR "$ENV{HOME}/xwin")
+if(NOT DEFINED XWIN_DIR OR XWIN_DIR STREQUAL "")
+    set(XWIN_DIR "$ENV{HOME}/xwin")
+endif()
 
 set(CMAKE_C_COMPILER   clang-cl)
 set(CMAKE_CXX_COMPILER clang-cl)

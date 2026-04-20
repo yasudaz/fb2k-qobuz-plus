@@ -4,13 +4,18 @@
 # Usage (from repo root):
 #   cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-clang-msvc.cmake
 #
+# Override xwin location:
+#   cmake -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-clang-msvc.cmake -DXWIN_DIR=/path/to/xwin
+#
 # On Windows, no toolchain file is needed; just open the folder in Visual Studio
 # or run: cmake -B build && cmake --build build
 
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
-set(XWIN_DIR "$ENV{HOME}/xwin")
+if(NOT DEFINED XWIN_DIR OR XWIN_DIR STREQUAL "")
+    set(XWIN_DIR "$ENV{HOME}/xwin")
+endif()
 
 set(CMAKE_C_COMPILER   clang-cl)
 set(CMAKE_CXX_COMPILER clang-cl)
