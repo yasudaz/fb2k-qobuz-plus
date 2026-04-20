@@ -165,3 +165,39 @@ private:
 
 static input_singletrack_factory_t<qobuz_input_impl> g_qobuz_input_factory;
 
+// ---- Album art extractor for qobuz://track/ URIs ----------------------------
+
+class qobuz_album_art_extractor : public album_art_extractor {
+public:
+    bool is_our_path(const char* p_path, const char* /*p_extension*/) override {
+        return pfc::string_has_prefix(p_path, "qobuz://track/");
+    }
+
+    album_art_extractor_instance_ptr open(file_ptr /*p_filehint*/,
+                                          const char* p_path,
+                                          abort_callback& p_abort) override
+    {
+        const char* prefix = "qobuz://track/";
+        const size_t prefix_len = std::strlen(prefix);
+        if (std::strncmp(p_path, prefix, prefix_len) != 0)
+            throw exception_album_art_not_found();
+
+        pfc::string8 track_id(p_path + prefix_len);
+        QobuzTrack track = g_qobuz_api.get_track_info(track_id.c_str(), p_abort);
+
+        if (track.cover_url.empty())
+            throw exception_album_art_not_found();
+
+        std::string jpeg = g_qobuz_api.download_url(track.cover_url.c_str());
+        if (jpeg.empty())
+            throw exception_album_art_not_found();
+
+        album_art_data_ptr art = album_art_data_impl::g_create(jpeg.data(), jpeg.size());
+        auto inst = fb2k::service_new<album_art_extractor_instance_simple>();
+        inst->set(album_art_ids::cover_front, art);
+        return inst;
+    }
+};
+
+static service_factory_single_t<qobuz_album_art_extractor> g_qobuz_art_extractor;
+

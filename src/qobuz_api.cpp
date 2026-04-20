@@ -166,6 +166,13 @@ std::string QobuzAPI::do_get(const char* url, abort_callback& /*abort*/) {
     return body;
 }
 
+std::string QobuzAPI::download_url(const char* url) {
+    auto [status, body] = winhttp_api_get(url, {});
+    if (status < 200 || status >= 300)
+        throw std::runtime_error("download_url: HTTP " + std::to_string(status));
+    return body;
+}
+
 void QobuzAPI::ensure_initialized(abort_callback& abort) {
     std::lock_guard<std::mutex> lock(m_init_mutex);
     if (m_initialized) return;
@@ -402,6 +409,13 @@ QobuzTrack QobuzAPI::get_track_info(const char* track_id, abort_callback& abort)
         if (tr.copyright.empty()) tr.copyright = jstr(alb, "copyright");
         if (tr.date.empty())      tr.date       = jstr(alb, "release_date_original");
 
+        // Cover art: prefer "extralarge" (~600px), fall back through smaller sizes
+        if (alb.contains("image") && alb["image"].is_object()) {
+            const auto& img = alb["image"];
+            for (auto key : {"extralarge", "large", "small", "thumbnail"}) {
+                std::string u = jstr(img, key);
+                if (!u.empty()) { tr.cover_url = u; break; }
+            }
         }
     }
 

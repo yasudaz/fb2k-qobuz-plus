@@ -24,6 +24,7 @@ struct QobuzTrack {
     std::string upc;
     std::string composer;
     std::string performers;     // raw role string from API
+    std::string cover_url;      // HTTPS URL to album cover JPEG (600px)
     int         track_number  = 0;
     int         total_tracks  = 0;
     int         disc_number   = 1;
@@ -43,6 +44,7 @@ class QobuzAPI {
 public:
     pfc::string8 get_track_url(const char* track_id, int format_id, abort_callback& abort);
     QobuzTrack   get_track_info(const char* track_id, abort_callback& abort);
+    std::string  download_url(const char* url);   // unauthenticated GET (CDN images etc.)
     std::vector<QobuzTrack> search_tracks(const char* query, int limit, abort_callback& abort);
     std::vector<QobuzAlbum> search_albums(const char* query, int limit, abort_callback& abort);
     std::vector<QobuzTrack> get_album_tracks(const char* album_id, abort_callback& abort);
