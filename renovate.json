@@ -1,0 +1,13 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["^\\.github/workflows/build-linux-cross\\.yml$"],
+      "matchStrings": ["XWIN_VERSION: \"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "Jake-Shadle/xwin",
+      "datasourceTemplate": "github-releases"
+    }
+  ]
+}
