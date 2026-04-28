@@ -1,0 +1,85 @@
+name: Build (Linux cross-compile)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Cross-compile for Windows (clang-cl + xwin)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm cmake ninja-build
+
+      - name: Install xwin
+        run: |
+          curl -fsSL https://github.com/Jake-Shadle/xwin/releases/latest/download/xwin-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz --strip-components=1 --wildcards -C /usr/local/bin '*/xwin'
+          xwin --version
+
+      # Cache both xwin output and fb2k SDK. Key on CMakeLists.txt so a deps
+      # change (e.g. SDK version bump) busts the cache.
+      - name: Cache .deps
+        uses: actions/cache@v4
+        with:
+          path: .deps
+          key: deps-linux-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: deps-linux-
+
+      - name: Splat Windows SDK headers (xwin)
+        run: |
+          if [ ! -d .deps/xwin/crt/lib/x86_64 ] || [ ! -d .deps/xwin/crt/lib/x86 ]; then
+            xwin --accept-license \
+              --arch x86 --arch x86_64 \
+              --cache-dir .deps/xwin-cache \
+              splat --output .deps/xwin
+          fi
+
+      # ── x64 build ────────────────────────────────────────────────────────
+      - name: Configure (x64)
+        run: |
+          cmake --preset linux-cross \
+            -DXWIN_DIR="${{ github.workspace }}/.deps/xwin" \
+            -DXWIN_AUTO_DOWNLOAD=OFF \
+            -DXWIN_ACCEPT_LICENSE=OFF
+
+      - name: Build (x64)
+        run: cmake --build build-clang --parallel
+
+      # ── x86 build ────────────────────────────────────────────────────────
+      - name: Configure (x86)
+        run: |
+          cmake --preset linux-cross-x86 \
+            -DXWIN_DIR="${{ github.workspace }}/.deps/xwin" \
+            -DXWIN_AUTO_DOWNLOAD=OFF \
+            -DXWIN_ACCEPT_LICENSE=OFF
+
+      - name: Build (x86)
+        run: cmake --build build-clang-x86 --parallel
+
+      # ── Package ──────────────────────────────────────────────────────────
+      - name: Package .fb2k-component
+        run: |
+          cmake \
+            -DFOO_DLL="${{ github.workspace }}/build-clang/foo_qobuz.dll" \
+            -DOUTPUT="${{ github.workspace }}/foo_qobuz.fb2k-component" \
+            -DARCH_X86=FALSE \
+            -DEXTRA_DLL="${{ github.workspace }}/build-clang-x86/foo_qobuz.dll" \
+            -P cmake/package_component.cmake
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: foo_qobuz-linux-cross
+          path: foo_qobuz.fb2k-component
+          if-no-files-found: error

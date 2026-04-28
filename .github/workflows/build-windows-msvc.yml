@@ -1,0 +1,51 @@
+name: Build (Windows MSVC)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Native Windows build (MSVC)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache .deps (fb2k SDK)
+        uses: actions/cache@v4
+        with:
+          path: .deps
+          key: deps-windows-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: deps-windows-
+
+      # ── x64 build ────────────────────────────────────────────────────────
+      - name: Configure (x64)
+        run: cmake --preset windows-msvc
+
+      - name: Build (x64)
+        run: cmake --build build-msvc --config Release --parallel
+
+      # ── x86 build ────────────────────────────────────────────────────────
+      - name: Configure (x86)
+        run: cmake --preset windows-msvc-x86
+
+      - name: Build (x86)
+        run: cmake --build build-msvc-x86 --config Release --parallel
+
+      # ── Package ──────────────────────────────────────────────────────────
+      # VS generator places DLLs under <build-dir>/Release/
+      - name: Package .fb2k-component
+        shell: pwsh
+        run: |
+          $x64dll = "${{ github.workspace }}\build-msvc\Release\foo_qobuz.dll"
+          $x86dll = "${{ github.workspace }}\build-msvc-x86\Release\foo_qobuz.dll"
+          $output = "${{ github.workspace }}\foo_qobuz.fb2k-component"
+          cmake "-DFOO_DLL=$x64dll" "-DOUTPUT=$output" "-DARCH_X86=FALSE" "-DEXTRA_DLL=$x86dll" -P cmake/package_component.cmake
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: foo_qobuz-windows-msvc
+          path: foo_qobuz.fb2k-component
+          if-no-files-found: error
