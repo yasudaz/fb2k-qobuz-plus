@@ -1,1 +1,2 @@
-/usr/x86_64-w64-mingw32/include/shlobj.h
+/* Case-shim: forward to the lowercase name found via /imsvc paths */
+#include <shlobj.h>

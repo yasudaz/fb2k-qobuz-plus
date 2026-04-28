@@ -1,1 +1,2 @@
-/usr/x86_64-w64-mingw32/include/winsock2.h
+/* Case-shim: forward to the lowercase name found via /imsvc paths */
+#include <winsock2.h>

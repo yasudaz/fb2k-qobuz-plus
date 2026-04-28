@@ -1,1 +1,2 @@
-/home/icedream/xwin/sdk/include/um/shlwapi.h
+/* Case-shim: forward to the lowercase name found via /imsvc paths */
+#include <shlwapi.h>
