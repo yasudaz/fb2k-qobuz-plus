@@ -117,18 +117,42 @@ public:
             metadb_handle_ptr handle;
             p_callback->handle_create(handle, make_playable_location(uri, 0));
 
-            // Provide whatever metadata we already have from the playlist
-            // response (title, artist, album, duration) so the playlist
-            // populates immediately without extra API calls per track.
             file_info_impl info;
-            if (!track.title.empty())  info.meta_add("TITLE",  track.title.c_str());
-            if (!track.artist.empty()) info.meta_add("ARTIST", track.artist.c_str());
-            if (!track.album.empty())  info.meta_add("ALBUM",  track.album.c_str());
-            if (track.duration > 0)    info.set_length(track.duration);
+            if (!track.title.empty())        info.meta_add("TITLE",        track.title.c_str());
+            if (!track.artist.empty())       info.meta_add("ARTIST",       track.artist.c_str());
+            if (!track.album_artist.empty()) info.meta_add("ALBUM ARTIST", track.album_artist.c_str());
+            if (!track.album.empty())        info.meta_add("ALBUM",        track.album.c_str());
+            if (track.track_number > 0)      info.meta_add("TRACKNUMBER",  std::to_string(track.track_number).c_str());
+            if (track.total_tracks > 0)      info.meta_add("TOTALTRACKS",  std::to_string(track.total_tracks).c_str());
+            if (track.disc_number > 0)       info.meta_add("DISCNUMBER",   std::to_string(track.disc_number).c_str());
+            if (track.total_discs > 1)       info.meta_add("TOTALDISCS",   std::to_string(track.total_discs).c_str());
+            if (!track.date.empty())         info.meta_add("DATE",         track.date.c_str());
+            if (!track.genre.empty())        info.meta_add("GENRE",        track.genre.c_str());
+            if (!track.composer.empty())     info.meta_add("COMPOSER",     track.composer.c_str());
+            if (!track.label.empty())        info.meta_add("LABEL",        track.label.c_str());
+            if (!track.isrc.empty())         info.meta_add("ISRC",         track.isrc.c_str());
+            if (!track.copyright.empty())    info.meta_add("COPYRIGHT",    track.copyright.c_str());
+            if (!track.upc.empty())          info.meta_add("UPC",          track.upc.c_str());
+            if (!track.performers.empty())   info.meta_add("PERFORMERS",   track.performers.c_str());
+
+            if (track.has_rg) {
+                pfc::string8 gain_str, peak_str;
+                gain_str << track.rg_track_gain << " dB";
+                peak_str << track.rg_track_peak;
+                info.meta_add("REPLAYGAIN_TRACK_GAIN", gain_str);
+                info.meta_add("REPLAYGAIN_TRACK_PEAK", peak_str);
+            }
+
+            info.set_length(track.duration);
+            if (track.sampling_rate > 0) info.info_set_int("samplerate", (t_int64)(track.sampling_rate * 1000.0 + 0.5));
+            if (track.bit_depth > 0)     info.info_set_int("bitspersample", track.bit_depth);
+            if (track.channels > 0)      info.info_set_int("channels", track.channels);
+            info.info_set("codec",    (int)cfg_quality().get() >= 27 ? "FLAC" : "AAC");
+            info.info_set("encoding", "lossless");
 
             p_callback->on_entry_info(handle,
                 playlist_loader_callback::entry_user_requested,
-                filestats_invalid, info, /*fresh=*/false);
+                filestats_invalid, info, /*fresh=*/true);
         }
     }
 

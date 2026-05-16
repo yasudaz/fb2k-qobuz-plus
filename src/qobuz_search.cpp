@@ -27,13 +27,52 @@ static void add_tracks_to_playlist(const std::vector<QobuzTrack>& tracks, bool p
     if (tracks.empty()) return;
 
     pfc::list_t<metadb_handle_ptr> items;
+    auto hint_list = metadb_hint_list::create();
+
     for (auto& t : tracks) {
         pfc::string8 path;
         path << "qobuz://track/" << t.id.c_str();
         metadb_handle_ptr h;
         metadb::get()->handle_create(h, make_playable_location(path, 0));
         items.add_item(h);
+
+        file_info_impl info;
+        if (!t.title.empty())        info.meta_add("TITLE",        t.title.c_str());
+        if (!t.artist.empty())       info.meta_add("ARTIST",       t.artist.c_str());
+        if (!t.album_artist.empty()) info.meta_add("ALBUM ARTIST", t.album_artist.c_str());
+        if (!t.album.empty())        info.meta_add("ALBUM",        t.album.c_str());
+        if (t.track_number > 0)      info.meta_add("TRACKNUMBER",  std::to_string(t.track_number).c_str());
+        if (t.total_tracks > 0)      info.meta_add("TOTALTRACKS",  std::to_string(t.total_tracks).c_str());
+        if (t.disc_number > 0)       info.meta_add("DISCNUMBER",   std::to_string(t.disc_number).c_str());
+        if (t.total_discs > 1)       info.meta_add("TOTALDISCS",   std::to_string(t.total_discs).c_str());
+        if (!t.date.empty())         info.meta_add("DATE",         t.date.c_str());
+        if (!t.genre.empty())        info.meta_add("GENRE",        t.genre.c_str());
+        if (!t.composer.empty())     info.meta_add("COMPOSER",     t.composer.c_str());
+        if (!t.label.empty())        info.meta_add("LABEL",        t.label.c_str());
+        if (!t.isrc.empty())         info.meta_add("ISRC",         t.isrc.c_str());
+        if (!t.copyright.empty())    info.meta_add("COPYRIGHT",    t.copyright.c_str());
+        if (!t.upc.empty())          info.meta_add("UPC",          t.upc.c_str());
+        if (!t.performers.empty())   info.meta_add("PERFORMERS",   t.performers.c_str());
+
+        if (t.has_rg) {
+            pfc::string8 gain_str, peak_str;
+            gain_str << t.rg_track_gain << " dB";
+            peak_str << t.rg_track_peak;
+            info.meta_add("REPLAYGAIN_TRACK_GAIN", gain_str);
+            info.meta_add("REPLAYGAIN_TRACK_PEAK", peak_str);
+        }
+
+        info.set_length(t.duration);
+        if (t.sampling_rate > 0) info.info_set_int("samplerate", (t_int64)(t.sampling_rate * 1000.0 + 0.5));
+        if (t.bit_depth > 0)     info.info_set_int("bitspersample", t.bit_depth);
+        if (t.channels > 0)      info.info_set_int("channels", t.channels);
+        info.info_set("codec",    (int)cfg_quality().get() >= 27 ? "FLAC" : "AAC");
+        info.info_set("encoding", "lossless");
+
+        hint_list->add_hint(h, info, filestats_invalid, true);
     }
+
+    hint_list->on_done();
 
     auto pm = playlist_manager::get();
     t_size pl = pm->get_active_playlist();
