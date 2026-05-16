@@ -351,6 +351,10 @@ static QobuzTrack track_from_json(const json& t) {
     tr.duration      = jdbl(t, "duration");
     tr.bit_depth     = jint(t, "maximum_bit_depth", 16);
     tr.sampling_rate = jdbl(t, "maximum_sampling_rate", 44.1);
+    tr.date          = jstr(t, "release_date_original");
+    if (tr.date.empty()) tr.date = jstr_nested(t, "album", "release_date_original");
+    tr.track_number  = jint(t, "track_number");
+    tr.disc_number   = jint(t, "media_number", 1);
     return tr;
 }
 
@@ -478,6 +482,8 @@ std::vector<QobuzAlbum> QobuzAPI::search_albums(const char* query, int limit,
             al.tracks_count = a["tracks_count"].get<int>();
         if (a.contains("released_at") && a["released_at"].is_number())
             al.year = (int)(a["released_at"].get<long long>() / 31536000L + 1970);
+        al.bit_depth     = jint(a, "maximum_bit_depth", 0);
+        al.sampling_rate = jdbl(a, "maximum_sampling_rate", 0.0);
         out.push_back(al);
     }
     return out;
@@ -499,13 +505,24 @@ std::vector<QobuzTrack> QobuzAPI::get_album_tracks(const char* album_id,
 
     std::string album_title  = jstr(j, "title");
     std::string album_artist = jstr_nested(j, "artist", "name");
+    int total_tracks = jint(j, "tracks_count");
+    int total_discs  = jint(j, "media_count", 1);
+    std::string genre = jstr_nested(j, "genre", "name");
+    std::string label = jstr_nested(j, "label", "name");
+    std::string upc   = jstr(j, "upc");
 
     for (auto& t : j["tracks"]["items"]) {
         if (t.is_null()) continue;
         QobuzTrack tr = track_from_json(t);
         if (tr.album.empty())  tr.album  = album_title;
         if (tr.artist.empty()) tr.artist = album_artist;
+        if (tr.album_artist.empty()) tr.album_artist = album_artist;
         tr.album_id = album_id;
+        tr.total_tracks = total_tracks;
+        tr.total_discs  = total_discs;
+        if (tr.genre.empty()) tr.genre = genre;
+        if (tr.label.empty()) tr.label = label;
+        if (tr.upc.empty())   tr.upc   = upc;
         out.push_back(tr);
     }
     return out;
