@@ -40,7 +40,9 @@ struct QobuzTrack {
 
 struct QobuzAlbum {
     std::string id, title, artist;
-    int tracks_count = 0, year = 0;
+    int         tracks_count = 0, year = 0;
+    int         bit_depth      = 16;
+    double      sampling_rate  = 44.1;
 };
 
 class QobuzAPI {
@@ -70,3 +72,4 @@ advconfig_string_factory&  cfg_auth_token();
 advconfig_string_factory&  cfg_app_id();
 advconfig_string_factory&  cfg_secret();
 advconfig_integer_factory& cfg_quality();
+advconfig_integer_factory& cfg_search_limit();

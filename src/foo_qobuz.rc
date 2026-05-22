@@ -3,7 +3,7 @@
 IDD_QOBUZ_SEARCH DIALOGEX 0, 0, 480, 300
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
 CAPTION "Qobuz Search"
-FONT 8, "MS Shell Dlg", 400, 0, 0x1
+FONT 12, "Calibri", 500, 0, 0x1
 BEGIN
     LTEXT           "Search:", -1, 7, 9, 30, 8
     EDITTEXT        IDC_SEARCH_EDIT, 38, 7, 350, 14, ES_AUTOHSCROLL | WS_TABSTOP
@@ -27,7 +27,7 @@ END
 
 IDD_QOBUZ_PREFS DIALOGEX 0, 0, 320, 150
 STYLE DS_SETFONT | DS_FIXEDSYS | DS_CONTROL | WS_CHILD | WS_VISIBLE
-FONT 8, "MS Shell Dlg", 400, 0, 0x1
+FONT 10, "Noto Sans CJK JP", 400, 0, 0x1
 BEGIN
     LTEXT           "Auth token:", -1, 7, 9, 55, 8
     EDITTEXT        IDC_PREFS_AUTH_EDIT, 65, 7, 248, 14, ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP
@@ -47,4 +47,7 @@ BEGIN
 
     LTEXT           "App ID and Secret are auto-fetched. Set these only if auto-fetch fails.",
                     -1, 14, 98, 292, 8
+
+    LTEXT           "Max search results:", -1, 14, 116, 48, 8
+    EDITTEXT        IDC_PREFS_LIMIT_EDT, 65, 114, 40, 14, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
 END

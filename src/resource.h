@@ -57,6 +57,9 @@
 #ifndef ES_PASSWORD
 #define ES_PASSWORD         0x0020
 #endif
+#ifndef ES_NUMBER
+#define ES_NUMBER           0x2000
+#endif
 
 // ComboBox styles
 #ifndef CBS_DROPDOWNLIST
@@ -105,3 +108,4 @@
 #define IDC_PREFS_QUAL_CMB  1022
 #define IDC_PREFS_APPID_EDT 1023
 #define IDC_PREFS_SECRET_EDT 1024
+#define IDC_PREFS_LIMIT_EDT  1025

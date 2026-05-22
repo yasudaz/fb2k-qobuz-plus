@@ -2,6 +2,13 @@
 
 Streams music from [Qobuz](https://www.qobuz.com/) directly inside foobar2000.
 
+## Changes in this fork
+
+- Fixed an issue to show track names immediately on the playlist when imported from Qobuz search.
+- Made the maximum number of search results configurable in the Preferences page (default 100, up to 10,000).
+- Enabled the "Enter" key to trigger searches in the search dialog.
+- Added Hi-Res/Quality column and sort function on the Search Dialog. Changed the font to Calibri, size 12. Included track properties when added to the playlist (fixed a bug to store track numbers).
+
 ## Features
 
 - **Search** tracks and albums by artist, title, or album name via **View → Qobuz → Search…**
@@ -26,6 +33,8 @@ Streams music from [Qobuz](https://www.qobuz.com/) directly inside foobar2000.
 Open **File → Preferences → Tools → Qobuz**.
 
 ### Auth token (required)
+
+**Note:** The Auth Token implementation is specifically designed for Windows. It will not work out-of-the-box on Linux environments.
 
 The auth token is the Qobuz user authentication token that identifies your account. To obtain it:
 
@@ -62,8 +71,8 @@ The plugin automatically scrapes its `app_id` and signing secrets from the Qobuz
 | Tool | Purpose |
 |---|---|
 | CMake ≥ 3.16 | Build system |
-| [clang-cl](https://clang.llvm.org/) (Clang ≥ 15) | Cross-compiler (Linux only) |
-| [xwin](https://github.com/Jake-Shadle/xwin) | Downloads MSVC headers and Windows SDK (Linux only) |
+| ~~[clang-cl](https://clang.llvm.org/) (Clang ≥ 15)~~ | ~~Cross-compiler (Linux only)~~ |
+| ~~[xwin](https://github.com/Jake-Shadle/xwin)~~ | ~~Downloads MSVC headers and Windows SDK (Linux only)~~ |
 
 The foobar2000 SDK is downloaded automatically at configure time from [foobar2000.org/SDK](https://www.foobar2000.org/SDK). To use a local copy, pass `-DFB2K_SDK_DIR=/path/to/sdk`.
 
@@ -78,16 +87,16 @@ The plugin uses [xwin](https://github.com/Jake-Shadle/xwin) to obtain the MSVC-c
 
 #### 64-bit (x86-64)
 
+~~cmake --preset linux-cross -DXWIN_ACCEPT_LICENSE=ON~~
 ```sh
-cmake --preset linux-cross -DXWIN_ACCEPT_LICENSE=ON
 cmake --build build-clang --target foo_qobuz
 # Output: build-clang/foo_qobuz.dll
 ```
 
 #### 32-bit (x86)
 
+~~cmake --preset linux-cross-x86 -DXWIN_ACCEPT_LICENSE=ON~~
 ```sh
-cmake --preset linux-cross-x86 -DXWIN_ACCEPT_LICENSE=ON
 cmake --build build-clang-x86 --target foo_qobuz
 # Output: build-clang-x86/foo_qobuz.dll
 ```
@@ -106,14 +115,14 @@ No additional tools are required; CMake uses MSVC or clang-cl from your Visual S
 
 ```bat
 cmake --preset windows-msvc
-cmake --build build-msvc --target foo_qobuz
+cmake --build build-msvc --target foo_qobuz --config Release
 ```
 
 #### Visual Studio 2022 — 32-bit
 
 ```bat
 cmake --preset windows-msvc-x86
-cmake --build build-msvc-x86 --target foo_qobuz
+cmake --build build-msvc-x86 --target foo_qobuz --config Release
 ```
 
 #### clang-cl (Ninja) — 64-bit
@@ -122,7 +131,7 @@ Run from a **64-bit Visual Studio Developer Command Prompt**:
 
 ```bat
 cmake --preset windows-clang-cl
-cmake --build build-clang-win --target foo_qobuz
+cmake --build build-clang-win --target foo_qobuz --config Release
 ```
 
 #### clang-cl (Ninja) — 32-bit
@@ -131,7 +140,7 @@ Run from a **32-bit (x86) Visual Studio Developer Command Prompt**:
 
 ```bat
 cmake --preset windows-clang-cl-x86
-cmake --build build-clang-win-x86 --target foo_qobuz
+cmake --build build-clang-win-x86 --target foo_qobuz --config Release
 ```
 
 ---
@@ -140,14 +149,11 @@ cmake --build build-clang-win-x86 --target foo_qobuz
 
 A `.fb2k-component` file is a ZIP archive with the 32-bit DLL at the root and the 64-bit DLL under `x64/`. Build both architectures first, then package them together.
 
-#### Example (Linux, after building both arches)
-
-```sh
-cmake --preset linux-cross -DXWIN_ACCEPT_LICENSE=ON \
-      -DFB2K_COMPONENT_EXTRA_DLL="$(pwd)/build-clang-x86/foo_qobuz.dll"
-cmake --build build-clang --target foo_qobuz_component
-# Output: build-clang/foo_qobuz.fb2k-component
-```
+~~#### Example (Linux, after building both arches)~~
+~~`cmake --preset linux-cross -DXWIN_ACCEPT_LICENSE=ON \`~~<br>
+~~`      -DFB2K_COMPONENT_EXTRA_DLL="$(pwd)/build-clang-x86/foo_qobuz.dll"`~~<br>
+~~`cmake --build build-clang --target foo_qobuz_component`~~<br>
+~~`# Output: build-clang/foo_qobuz.fb2k-component`~~
 
 Or invoke the packaging script directly without reconfiguring:
 
@@ -167,6 +173,10 @@ The `FB2K_COMPONENT_EXTRA_DLL` variable is optional — if omitted, the package 
 1. Open foobar2000 **Preferences → Components**.
 2. Click **Install…** and select `foo_qobuz.fb2k-component`.
 3. Click **OK** and restart foobar2000 when prompted.
+
+## Acknowledgments
+
+A special thanks to the original author, Carl Kittelberger (icedream), for creating this fantastic plugin and sharing it with the open-source community. This fork builds upon their excellent foundation.
 
 ## License
 

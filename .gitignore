@@ -1,5 +1,35 @@
 # CMake build directories
 build*/
+cmake-build-*/
 
 # Auto-downloaded dependencies
 .deps/
+
+# Security: Prevent committing credentials, tokens, or local environment configs
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+config.ini
+*.local
+
+# Compiler and Build outputs (prevents leaking debug symbols and local paths)
+*.obj
+*.o
+*.dll
+*.exe
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.fb2k-component
+
+# IDEs and OS specific files (often contain local configurations or env vars)
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+.DS_Store
+Thumbs.db

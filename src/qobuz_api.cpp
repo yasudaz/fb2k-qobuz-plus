@@ -26,6 +26,8 @@ static constexpr GUID guid_cfg_secret =
     { 0x6f3d2c8a, 0x4b9e, 0x4f1d, { 0xa7, 0x83, 0x2e, 0x5c, 0x9b, 0x3f, 0x4d, 0x6a } };
 static constexpr GUID guid_cfg_quality =
     { 0x9b4e3f7c, 0x2a1d, 0x4c8b, { 0x86, 0x94, 0x4f, 0x2a, 0x7d, 0x5c, 0x3e, 0x1b } };
+static constexpr GUID guid_cfg_search_limit =
+    { 0x1d2e3f4a, 0x5b6c, 0x7d8e, { 0x9f, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x60 } };
 
 // Note: guid_advcfg_branch is not registered as an advconfig_branch_factory,
 // so these entries are hidden from the Advanced Preferences tree.
@@ -47,10 +49,16 @@ advconfig_integer_factory g_cfg_quality(
     "foo_qobuz.quality", guid_cfg_quality, guid_advcfg_branch, 3,
     27, 5, 27);
 
+advconfig_integer_factory g_cfg_search_limit(
+    "Search results limit",
+    "foo_qobuz.search_limit", guid_cfg_search_limit, guid_advcfg_branch, 4,
+    100, 1, 10000);
+
 advconfig_string_factory&  cfg_auth_token() { return g_cfg_auth_token; }
 advconfig_string_factory&  cfg_app_id()     { return g_cfg_app_id; }
 advconfig_string_factory&  cfg_secret()     { return g_cfg_secret; }
 advconfig_integer_factory& cfg_quality()    { return g_cfg_quality; }
+advconfig_integer_factory& cfg_search_limit() { return g_cfg_search_limit; }
 
 // ---- WinHTTP helpers --------------------------------------------------------
 
@@ -351,6 +359,10 @@ static QobuzTrack track_from_json(const json& t) {
     tr.duration      = jdbl(t, "duration");
     tr.bit_depth     = jint(t, "maximum_bit_depth", 16);
     tr.sampling_rate = jdbl(t, "maximum_sampling_rate", 44.1);
+    tr.date          = jstr(t, "release_date_original");
+    if (tr.date.empty()) tr.date = jstr_nested(t, "album", "release_date_original");
+    tr.track_number  = jint(t, "track_number");
+    tr.disc_number   = jint(t, "media_number", 1);
     return tr;
 }
 
@@ -478,6 +490,8 @@ std::vector<QobuzAlbum> QobuzAPI::search_albums(const char* query, int limit,
             al.tracks_count = a["tracks_count"].get<int>();
         if (a.contains("released_at") && a["released_at"].is_number())
             al.year = (int)(a["released_at"].get<long long>() / 31536000L + 1970);
+        al.bit_depth     = jint(a, "maximum_bit_depth", 0);
+        al.sampling_rate = jdbl(a, "maximum_sampling_rate", 0.0);
         out.push_back(al);
     }
     return out;
@@ -499,13 +513,24 @@ std::vector<QobuzTrack> QobuzAPI::get_album_tracks(const char* album_id,
 
     std::string album_title  = jstr(j, "title");
     std::string album_artist = jstr_nested(j, "artist", "name");
+    int total_tracks = jint(j, "tracks_count");
+    int total_discs  = jint(j, "media_count", 1);
+    std::string genre = jstr_nested(j, "genre", "name");
+    std::string label = jstr_nested(j, "label", "name");
+    std::string upc   = jstr(j, "upc");
 
     for (auto& t : j["tracks"]["items"]) {
         if (t.is_null()) continue;
         QobuzTrack tr = track_from_json(t);
         if (tr.album.empty())  tr.album  = album_title;
         if (tr.artist.empty()) tr.artist = album_artist;
+        if (tr.album_artist.empty()) tr.album_artist = album_artist;
         tr.album_id = album_id;
+        tr.total_tracks = total_tracks;
+        tr.total_discs  = total_discs;
+        if (tr.genre.empty()) tr.genre = genre;
+        if (tr.label.empty()) tr.label = label;
+        if (tr.upc.empty())   tr.upc   = upc;
         out.push_back(tr);
     }
     return out;
