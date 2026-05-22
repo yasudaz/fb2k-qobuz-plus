@@ -75,6 +75,11 @@ public:
         GetDlgItemTextA(m_wnd, IDC_PREFS_SECRET_EDT, &secret[0], len + 1);
         cfg_secret().set(secret.c_str());
 
+        // Search limit
+        BOOL translated = FALSE;
+        UINT limit = GetDlgItemInt(m_wnd, IDC_PREFS_LIMIT_EDT, &translated, FALSE);
+        if (translated) cfg_search_limit().set(limit);
+
         m_changed = false;
         m_callback->on_state_changed();
     }
@@ -84,6 +89,7 @@ public:
         SetDlgItemTextA(m_wnd, IDC_PREFS_APPID_EDT,   "");
         SetDlgItemTextA(m_wnd, IDC_PREFS_SECRET_EDT,  "");
         SendDlgItemMessage(m_wnd, IDC_PREFS_QUAL_CMB, CB_SETCURSEL, 0, 0); // Studio Master
+        SetDlgItemInt(m_wnd, IDC_PREFS_LIMIT_EDT, 100, FALSE);
 
         mark_changed();
     }
@@ -113,6 +119,8 @@ private:
         cfg_secret().get(val);
         SetDlgItemTextA(m_wnd, IDC_PREFS_SECRET_EDT, val.c_str());
 
+        SetDlgItemInt(m_wnd, IDC_PREFS_LIMIT_EDT, (UINT)cfg_search_limit().get(), FALSE);
+
         m_changed = false;
     }
 
@@ -139,6 +147,7 @@ private:
             case IDC_PREFS_AUTH_EDIT:
             case IDC_PREFS_APPID_EDT:
             case IDC_PREFS_SECRET_EDT:
+            case IDC_PREFS_LIMIT_EDT:
                 if (HIWORD(wp) == EN_CHANGE) self->mark_changed();
                 break;
             case IDC_PREFS_QUAL_CMB:
