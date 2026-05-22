@@ -26,6 +26,8 @@ static constexpr GUID guid_cfg_secret =
     { 0x6f3d2c8a, 0x4b9e, 0x4f1d, { 0xa7, 0x83, 0x2e, 0x5c, 0x9b, 0x3f, 0x4d, 0x6a } };
 static constexpr GUID guid_cfg_quality =
     { 0x9b4e3f7c, 0x2a1d, 0x4c8b, { 0x86, 0x94, 0x4f, 0x2a, 0x7d, 0x5c, 0x3e, 0x1b } };
+static constexpr GUID guid_cfg_search_limit =
+    { 0x1d2e3f4a, 0x5b6c, 0x7d8e, { 0x9f, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x60 } };
 
 // Note: guid_advcfg_branch is not registered as an advconfig_branch_factory,
 // so these entries are hidden from the Advanced Preferences tree.
@@ -47,10 +49,16 @@ advconfig_integer_factory g_cfg_quality(
     "foo_qobuz.quality", guid_cfg_quality, guid_advcfg_branch, 3,
     27, 5, 27);
 
+advconfig_integer_factory g_cfg_search_limit(
+    "Search results limit",
+    "foo_qobuz.search_limit", guid_cfg_search_limit, guid_advcfg_branch, 4,
+    100, 1, 10000);
+
 advconfig_string_factory&  cfg_auth_token() { return g_cfg_auth_token; }
 advconfig_string_factory&  cfg_app_id()     { return g_cfg_app_id; }
 advconfig_string_factory&  cfg_secret()     { return g_cfg_secret; }
 advconfig_integer_factory& cfg_quality()    { return g_cfg_quality; }
+advconfig_integer_factory& cfg_search_limit() { return g_cfg_search_limit; }
 
 // ---- WinHTTP helpers --------------------------------------------------------
 

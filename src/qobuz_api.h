@@ -72,3 +72,4 @@ advconfig_string_factory&  cfg_auth_token();
 advconfig_string_factory&  cfg_app_id();
 advconfig_string_factory&  cfg_secret();
 advconfig_integer_factory& cfg_quality();
+advconfig_integer_factory& cfg_search_limit();

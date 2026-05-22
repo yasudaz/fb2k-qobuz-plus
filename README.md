@@ -5,6 +5,8 @@ Streams music from [Qobuz](https://www.qobuz.com/) directly inside foobar2000.
 ## Changes in this fork
 
 - Fixed an issue to show track names immediately on the playlist when imported from Qobuz search.
+- Made the maximum number of search results configurable in the Preferences page (default 100, up to 10,000).
+- Enabled the "Enter" key to trigger searches in the search dialog.
 - Added Hi-Res/Quality column and sort function on the Search Dialog. Changed the font to Calibri, size 12. Included track properties when added to the playlist (fixed a bug to store track numbers).
 
 ## Features

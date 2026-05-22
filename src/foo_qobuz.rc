@@ -47,4 +47,7 @@ BEGIN
 
     LTEXT           "App ID and Secret are auto-fetched. Set these only if auto-fetch fails.",
                     -1, 14, 98, 292, 8
+
+    LTEXT           "Max search results:", -1, 14, 116, 48, 8
+    EDITTEXT        IDC_PREFS_LIMIT_EDT, 65, 114, 40, 14, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
 END

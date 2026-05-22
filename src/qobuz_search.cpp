@@ -188,6 +188,8 @@ static void update_header_sort_icon(HWND lv, int sort_col, bool ascending) {
 // Utility: UTF-8 → wchar_t for ListView text
 static std::wstring to_wide(const std::string& s) {
     if (s.empty()) return {};
+    pfc::stringcvt::string_wide_from_utf8 cvt(s.c_str());
+    return std::wstring(cvt.get_ptr());
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
     std::wstring out(n, 0);
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, out.data(), n);
@@ -271,9 +273,8 @@ static std::string get_lv_track_id(HWND lv, int row) {
     item.cchTextMax = (int)std::size(buf);
     ListView_GetItem(lv, &item);
     // Convert back to UTF-8
-    char narrow[64] = {};
-    WideCharToMultiByte(CP_UTF8, 0, buf, -1, narrow, sizeof(narrow), nullptr, nullptr);
-    return narrow;
+    pfc::stringcvt::string_utf8_from_wide cvt(buf);
+    return cvt.get_ptr();
 }
 
 static std::string get_lv_album_id(HWND lv, int row) {
@@ -285,6 +286,8 @@ static std::string get_lv_album_id(HWND lv, int row) {
     item.pszText    = buf;
     item.cchTextMax = (int)std::size(buf);
     ListView_GetItem(lv, &item);
+    pfc::stringcvt::string_utf8_from_wide cvt(buf);
+    return cvt.get_ptr();
     char narrow[256] = {};
     WideCharToMultiByte(CP_UTF8, 0, buf, -1, narrow, sizeof(narrow), nullptr, nullptr);
     return narrow;
@@ -356,10 +359,10 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             return TRUE;
         }
 
-        if (ctrl == IDC_SEARCH_BTN ||
+        if (ctrl == IDC_SEARCH_BTN || ctrl == IDOK ||
             (ctrl == IDC_SEARCH_EDIT && HIWORD(wParam) == EN_CHANGE)) {
 
-            if (LOWORD(wParam) == IDC_SEARCH_BTN) {
+            if (ctrl == IDC_SEARCH_BTN || ctrl == IDOK) {
                 // Kick off a background search
                 g_search_state.cancel = true;  // cancel any previous search
                 g_search_state.cancel = false; // reset for new one
@@ -388,11 +391,11 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                         // abort_callback_event here; just proceed and let it finish.
 
                         if (do_albums) {
-                            auto results = g_qobuz_api.search_albums(q.c_str(), 30, abort_cb);
+                            auto results = g_qobuz_api.search_albums(q.c_str(), 1024, abort_cb);
                             auto* heap = new std::vector<QobuzAlbum>(std::move(results));
                             PostMessageW(hwnd_copy, WM_SEARCH_ALBUMS, 0, (LPARAM)heap);
                         } else {
-                            auto results = g_qobuz_api.search_tracks(q.c_str(), 30, abort_cb);
+                            auto results = g_qobuz_api.search_tracks(q.c_str(), 1024, abort_cb);
                             auto* heap = new std::vector<QobuzTrack>(std::move(results));
                             PostMessageW(hwnd_copy, WM_SEARCH_RESULTS, 0, (LPARAM)heap);
                         }
