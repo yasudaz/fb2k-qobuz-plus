@@ -496,6 +496,19 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             }
             return 0;
         }
+        else if (nm->idFrom == IDC_RESULTS_LIST && nm->code == NM_RCLICK) {
+            int sel = ListView_GetNextItem(nm->hwndFrom, -1, LVNI_SELECTED);
+            if (sel != -1) {
+                HMENU hMenu = CreatePopupMenu();
+                AppendMenuW(hMenu, MF_STRING, IDC_ADD_PLAYLIST, L"Add to Playlist");
+                AppendMenuW(hMenu, MF_STRING, IDC_PLAY_NOW, L"Play Now");
+                POINT pt;
+                GetCursorPos(&pt);
+                TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
+                DestroyMenu(hMenu);
+            }
+            return 0;
+        }
         else if (nm->idFrom == IDC_RESULTS_LIST && nm->code == LVN_COLUMNCLICK) {
             auto* nmlv = reinterpret_cast<LPNMLISTVIEW>(lParam);
             if (!dd) return 0;
