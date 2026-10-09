@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Carl Kittelberger <icedream@icedream.pw>
+// SPDX-FileCopyrightText: 2026 yasudaz <https://github.com/yasudaz>
 
 #pragma once
 
@@ -102,6 +103,7 @@
 #define IDC_TYPE_ALBUMS     1009
 #define IDC_STATUS_TEXT     1010
 #define IDC_ADD_FAVORITES_BTN 1011
+#define IDC_CHECK_HIRES     1012
 
 // Preferences dialog
 #define IDD_QOBUZ_PREFS     1020

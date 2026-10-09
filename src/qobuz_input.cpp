@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Carl Kittelberger <icedream@icedream.pw>
+// SPDX-FileCopyrightText: 2026 yasudaz <https://github.com/yasudaz>
 
 #include "stdafx.h"
 #include "qobuz_api.h"
+#include <thread>
+#include <atomic>
 
 // ---- Qobuz input_singletrack_impl ------------------------------------------
 //
@@ -221,4 +224,108 @@ public:
 };
 
 static service_factory_single_t<qobuz_album_art_extractor> g_qobuz_art_extractor;
+
+// ---- Prefetch callback for next track ---------------------------------------
+
+class qobuz_play_callback : public play_callback_static {
+public:
+    unsigned get_flags() override {
+        return flag_on_playback_new_track | flag_on_playback_stop | flag_on_playback_seek | flag_on_playback_time;
+    }
+
+    void on_playback_starting(play_control::t_track_command, bool) noexcept override {}
+
+    void on_playback_new_track(metadb_handle_ptr p_track) noexcept override {
+        m_prefetched = false;
+        m_current_track_path = p_track.is_valid() ? p_track->get_path() : "";
+    }
+
+    void on_playback_stop(play_control::t_stop_reason) noexcept override {
+        m_prefetched = false;
+        m_current_track_path.reset();
+    }
+
+    void on_playback_seek(double p_time) noexcept override {
+        double length = 0;
+        try {
+            length = playback_control::get()->playback_get_length_ex();
+        } catch (...) {
+            return;
+        }
+        if (length > p_time + 10.0) {
+            m_prefetched = false;
+        }
+    }
+
+    void on_playback_pause(bool) noexcept override {}
+    void on_playback_edited(metadb_handle_ptr) noexcept override {}
+    void on_playback_dynamic_info(const file_info&) noexcept override {}
+    void on_playback_dynamic_info_track(const file_info&) noexcept override {}
+    void on_volume_change(float) noexcept override {}
+
+    void on_playback_time(double p_time) noexcept override {
+        if (m_prefetched) return;
+        if (!is_qobuz_track_url(m_current_track_path.c_str())) return;
+
+        double length = 0;
+        try {
+            length = playback_control::get()->playback_get_length_ex();
+        } catch (...) {
+            return;
+        }
+
+        if (length <= 0 || length - p_time > 10.0) return;
+
+        m_prefetched = true;
+
+        try {
+            auto pm = playlist_manager::get();
+
+            // Check playback queue first
+            metadb_handle_ptr next_handle;
+            if (pm->queue_get_count() > 0) {
+                pfc::list_t<t_playback_queue_item> queue_items;
+                pm->queue_get_contents(queue_items);
+                if (queue_items.get_count() > 0) {
+                    next_handle = queue_items[0].m_handle;
+                }
+            }
+
+            // If queue is empty, check playlist next item
+            if (next_handle.is_empty()) {
+                t_size pl = pm->get_playing_playlist();
+                if (pl == pfc_infinite) pl = pm->get_active_playlist();
+                if (pl != pfc_infinite) {
+                    t_size playing_item = pfc_infinite;
+                    if (pm->get_playing_item_location(&pl, &playing_item)) {
+                        t_size next_item = playing_item + 1;
+                        if (next_item < pm->playlist_get_item_count(pl)) {
+                            pm->playlist_get_item_handle(next_handle, pl, next_item);
+                        }
+                    }
+                }
+            }
+
+            if (next_handle.is_valid()) {
+                const char* next_path = next_handle->get_path();
+                if (is_qobuz_track_url(next_path)) {
+                    pfc::string8 next_id = extract_track_id(next_path);
+                    int format_id = (int)cfg_quality().get();
+                    std::thread([next_id, format_id]() {
+                        g_qobuz_api.prefetch_track_url(next_id.c_str(), format_id);
+                    }).detach();
+                }
+            }
+        } catch (...) {
+            // Ignore prefetch exceptions
+        }
+    }
+
+private:
+    std::atomic<bool> m_prefetched{ false };
+    pfc::string8      m_current_track_path;
+};
+
+static play_callback_static_factory_t<qobuz_play_callback> g_qobuz_play_callback_factory;
+
 

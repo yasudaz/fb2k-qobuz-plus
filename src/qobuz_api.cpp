@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Carl Kittelberger <icedream@icedream.pw>
+// SPDX-FileCopyrightText: 2026 yasudaz <https://github.com/yasudaz>
 
 #include "stdafx.h"
 #include "qobuz_api.h"
@@ -247,6 +248,18 @@ void QobuzAPI::ensure_initialized(abort_callback& abort) {
 
 pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id,
                                       abort_callback& abort) {
+    if (track_id && *track_id) {
+        std::lock_guard<std::mutex> lk(m_cache_mutex);
+        auto it = m_stream_url_cache.find({track_id, format_id});
+        if (it != m_stream_url_cache.end()) {
+            if (std::time(nullptr) < it->second.expires_at) {
+                return it->second.url;
+            } else {
+                m_stream_url_cache.erase(it);
+            }
+        }
+    }
+
     ensure_initialized(abort);
 
     pfc::string8 auth_token;
@@ -315,7 +328,15 @@ pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id,
             }
 
             m_secret = sec; // cache the working secret
-            return pfc::string8(j["url"].get<std::string>().c_str());
+            pfc::string8 stream_url(j["url"].get<std::string>().c_str());
+            if (track_id && *track_id) {
+                std::lock_guard<std::mutex> lk(m_cache_mutex);
+                m_stream_url_cache[{track_id, format_id}] = {
+                    stream_url,
+                    std::time(nullptr) + 900 // 15 minutes TTL
+                };
+            }
+            return stream_url;
 
         } catch (std::exception const& e) {
             last_error = e.what();
@@ -329,6 +350,23 @@ pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id,
         m_secret.clear();
     }
     throw std::runtime_error("Qobuz: could not get stream URL (" + last_error + ")");
+}
+
+void QobuzAPI::prefetch_track_url(const char* track_id, int format_id) {
+    if (!track_id || !*track_id) return;
+    {
+        std::lock_guard<std::mutex> lk(m_cache_mutex);
+        auto it = m_stream_url_cache.find({track_id, format_id});
+        if (it != m_stream_url_cache.end() && std::time(nullptr) < it->second.expires_at) {
+            return;
+        }
+    }
+    try {
+        abort_callback_dummy abort;
+        get_track_url(track_id, format_id, abort);
+    } catch (...) {
+        // Prefetch is best-effort
+    }
 }
 
 // ---- helpers ----------------------------------------------------------------

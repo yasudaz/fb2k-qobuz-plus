@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Carl Kittelberger <icedream@icedream.pw>
+// SPDX-FileCopyrightText: 2026 yasudaz <https://github.com/yasudaz>
 
 #include "stdafx.h"
 #include "qobuz_api.h"
@@ -117,6 +118,9 @@ enum SearchMode { MODE_TRACKS, MODE_ALBUMS };
 
 struct DialogData {
     SearchMode mode = MODE_TRACKS;
+    bool filter_hires = false;
+    std::vector<QobuzTrack>  raw_track_results;
+    std::vector<QobuzAlbum>  raw_album_results;
     std::vector<QobuzTrack>  track_results;
     std::vector<QobuzAlbum>  album_results;
     // For album-drill-down: current album_id being expanded
@@ -125,6 +129,26 @@ struct DialogData {
     int sort_column = -1;
     bool sort_ascending = true;
 };
+
+static int calc_col_width(HWND lv, int char_count) {
+    HDC hdc = GetDC(lv);
+    if (!hdc) return char_count * 8 + 16;
+    HFONT hFont = (HFONT)SendMessageW(lv, WM_GETFONT, 0, 0);
+    HFONT hOldFont = nullptr;
+    if (hFont) hOldFont = (HFONT)SelectObject(hdc, hFont);
+
+    TEXTMETRICW tm = {};
+    GetTextMetricsW(hdc, &tm);
+    SIZE szZero = {};
+    GetTextExtentPoint32W(hdc, L"0", 1, &szZero);
+    int char_w = (std::max)((int)tm.tmAveCharWidth, (int)szZero.cx);
+    if (char_w <= 0) char_w = 8;
+
+    if (hOldFont) SelectObject(hdc, hOldFont);
+    ReleaseDC(lv, hdc);
+
+    return char_w * char_count + 16;
+}
 
 static void setup_track_columns(HWND lv) {
     ListView_DeleteAllItems(lv);
@@ -138,14 +162,14 @@ static void setup_track_columns(HWND lv) {
         col.pszText = (LPWSTR)name;
         ListView_InsertColumn(lv, ListView_GetHeader(lv) ? Header_GetItemCount(ListView_GetHeader(lv)) : 0, &col);
     };
-    add_col(L"Title",   200);
-    add_col(L"Artist",  140);
-    add_col(L"Album",   120);
-    add_col(L"Duration", 55);
-    add_col(L"Hi-Res",   55);
-    add_col(L"Quality",  75);
-    add_col(L"Date",     80);
-    add_col(L"ID",        0);  // Hidden: used to retrieve track id
+    add_col(L"Title",    calc_col_width(lv, 30));
+    add_col(L"Artist",   calc_col_width(lv, 20));
+    add_col(L"Album",    calc_col_width(lv, 20));
+    add_col(L"Duration", calc_col_width(lv, 8));
+    add_col(L"Hi-Res",   calc_col_width(lv, 6));
+    add_col(L"Quality",  calc_col_width(lv, 10));
+    add_col(L"Date",     calc_col_width(lv, 10));
+    add_col(L"ID",       0);  // Hidden: used to retrieve track id
 }
 
 static void setup_album_columns(HWND lv) {
@@ -160,13 +184,13 @@ static void setup_album_columns(HWND lv) {
         col.pszText = (LPWSTR)name;
         ListView_InsertColumn(lv, Header_GetItemCount(ListView_GetHeader(lv)), &col);
     };
-    add_col(L"Title",   240);
-    add_col(L"Artist",  160);
-    add_col(L"Tracks",   55);
-    add_col(L"Year",     55);
-    add_col(L"Hi-Res",   55);
-    add_col(L"Quality",  75);
-    add_col(L"ID",         0);
+    add_col(L"Title",   calc_col_width(lv, 30));
+    add_col(L"Artist",  calc_col_width(lv, 20));
+    add_col(L"Tracks",  calc_col_width(lv, 6));
+    add_col(L"Year",    calc_col_width(lv, 4));
+    add_col(L"Hi-Res",  calc_col_width(lv, 6));
+    add_col(L"Quality", calc_col_width(lv, 10));
+    add_col(L"ID",      0);
 }
 
 static void update_header_sort_icon(HWND lv, int sort_col, bool ascending) {
@@ -293,6 +317,108 @@ static std::string get_lv_album_id(HWND lv, int row) {
     return narrow;
 }
 
+static bool is_hires(const QobuzTrack& t) {
+    return t.bit_depth > 16 || t.sampling_rate > 44.1;
+}
+
+static bool is_hires(const QobuzAlbum& a) {
+    return a.bit_depth > 16 || a.sampling_rate > 44.1;
+}
+
+static void sort_and_refresh_tracks(HWND hwnd, DialogData* dd) {
+    if (!dd) return;
+    HWND lv = GetDlgItem(hwnd, IDC_RESULTS_LIST);
+    dd->track_results.clear();
+    for (const auto& t : dd->raw_track_results) {
+        if (!dd->filter_hires || is_hires(t)) {
+            dd->track_results.push_back(t);
+        }
+    }
+
+    if (dd->sort_column >= 0) {
+        auto col = dd->sort_column;
+        auto asc = dd->sort_ascending;
+        std::stable_sort(dd->track_results.begin(), dd->track_results.end(), [col, asc](const QobuzTrack& a, const QobuzTrack& b) {
+            int cmp = 0;
+            if (col == COL_TITLE) cmp = _stricmp(a.title.c_str(), b.title.c_str());
+            else if (col == COL_ARTIST) cmp = _stricmp(a.artist.c_str(), b.artist.c_str());
+            else if (col == COL_ALBUM) cmp = _stricmp(a.album.c_str(), b.album.c_str());
+            else if (col == COL_DURATION) cmp = (a.duration < b.duration) ? -1 : (a.duration > b.duration ? 1 : 0);
+            else if (col == COL_HIRES) {
+                bool a_hr = is_hires(a);
+                bool b_hr = is_hires(b);
+                cmp = (a_hr == b_hr) ? 0 : (a_hr ? 1 : -1);
+            }
+            else if (col == COL_QUALITY) {
+                if (a.bit_depth != b.bit_depth) cmp = a.bit_depth < b.bit_depth ? -1 : 1;
+                else cmp = (a.sampling_rate < b.sampling_rate) ? -1 : (a.sampling_rate > b.sampling_rate ? 1 : 0);
+            }
+            else if (col == COL_DATE) cmp = _stricmp(a.date.c_str(), b.date.c_str());
+
+            if (cmp == 0) return false;
+            return asc ? (cmp < 0) : (cmp > 0);
+        });
+    }
+
+    populate_tracks(lv, dd->track_results);
+    update_header_sort_icon(lv, dd->sort_column, dd->sort_ascending);
+
+    wchar_t status[64];
+    _snwprintf_s(status, 64, L"%d track(s) found.", (int)dd->track_results.size());
+    SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, status);
+}
+
+static void sort_and_refresh_albums(HWND hwnd, DialogData* dd) {
+    if (!dd) return;
+    HWND lv = GetDlgItem(hwnd, IDC_RESULTS_LIST);
+    dd->album_results.clear();
+    for (const auto& a : dd->raw_album_results) {
+        if (!dd->filter_hires || is_hires(a)) {
+            dd->album_results.push_back(a);
+        }
+    }
+
+    if (dd->sort_column >= 0) {
+        auto col = dd->sort_column;
+        auto asc = dd->sort_ascending;
+        std::stable_sort(dd->album_results.begin(), dd->album_results.end(), [col, asc](const QobuzAlbum& a, const QobuzAlbum& b) {
+            int cmp = 0;
+            if (col == COL_A_TITLE) cmp = _stricmp(a.title.c_str(), b.title.c_str());
+            else if (col == COL_A_ARTIST) cmp = _stricmp(a.artist.c_str(), b.artist.c_str());
+            else if (col == COL_A_TRACKS) cmp = (a.tracks_count < b.tracks_count) ? -1 : (a.tracks_count > b.tracks_count ? 1 : 0);
+            else if (col == COL_A_YEAR) cmp = (a.year < b.year) ? -1 : (a.year > b.year ? 1 : 0);
+            else if (col == COL_A_HIRES) {
+                bool a_hr = is_hires(a);
+                bool b_hr = is_hires(b);
+                cmp = (a_hr == b_hr) ? 0 : (a_hr ? 1 : -1);
+            }
+            else if (col == COL_A_QUALITY) {
+                if (a.bit_depth != b.bit_depth) cmp = a.bit_depth < b.bit_depth ? -1 : 1;
+                else cmp = (a.sampling_rate < b.sampling_rate) ? -1 : (a.sampling_rate > b.sampling_rate ? 1 : 0);
+            }
+
+            if (cmp == 0) return false;
+            return asc ? (cmp < 0) : (cmp > 0);
+        });
+    }
+
+    populate_albums(lv, dd->album_results);
+    update_header_sort_icon(lv, dd->sort_column, dd->sort_ascending);
+
+    wchar_t status[64];
+    _snwprintf_s(status, 64, L"%d album(s) found.", (int)dd->album_results.size());
+    SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, status);
+}
+
+static void apply_filter_and_refresh(HWND hwnd, DialogData* dd) {
+    if (!dd) return;
+    if (dd->mode == MODE_TRACKS) {
+        sort_and_refresh_tracks(hwnd, dd);
+    } else {
+        sort_and_refresh_albums(hwnd, dd);
+    }
+}
+
 // ---- Dialog Proc ---------------------------------------------------------
 
 static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -310,6 +436,7 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         // Default to Tracks mode
         CheckDlgButton(hwnd, IDC_TYPE_TRACKS, BST_CHECKED);
         CheckDlgButton(hwnd, IDC_TYPE_ALBUMS, BST_UNCHECKED);
+        CheckDlgButton(hwnd, IDC_CHECK_HIRES, BST_UNCHECKED);
 
         HWND lv = GetDlgItem(hwnd, IDC_RESULTS_LIST);
         ListView_SetExtendedListViewStyle(lv, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
@@ -341,6 +468,14 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             return TRUE;
         }
 
+        if (ctrl == IDC_CHECK_HIRES) {
+            if (dd) {
+                dd->filter_hires = (IsDlgButtonChecked(hwnd, IDC_CHECK_HIRES) == BST_CHECKED);
+                apply_filter_and_refresh(hwnd, dd);
+            }
+            return TRUE;
+        }
+
         if (ctrl == IDC_TYPE_TRACKS || ctrl == IDC_TYPE_ALBUMS) {
             SearchMode newMode = (ctrl == IDC_TYPE_TRACKS) ? MODE_TRACKS : MODE_ALBUMS;
             if (dd && newMode != dd->mode) {
@@ -350,10 +485,10 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 HWND lv = GetDlgItem(hwnd, IDC_RESULTS_LIST);
                 if (dd->mode == MODE_TRACKS) {
                     setup_track_columns(lv);
-                    populate_tracks(lv, dd->track_results);
+                    sort_and_refresh_tracks(hwnd, dd);
                 } else {
                     setup_album_columns(lv);
-                    populate_albums(lv, dd->album_results);
+                    sort_and_refresh_albums(hwnd, dd);
                 }
             }
             return TRUE;
@@ -496,19 +631,6 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             }
             return 0;
         }
-        else if (nm->idFrom == IDC_RESULTS_LIST && nm->code == NM_RCLICK) {
-            int sel = ListView_GetNextItem(nm->hwndFrom, -1, LVNI_SELECTED);
-            if (sel != -1) {
-                HMENU hMenu = CreatePopupMenu();
-                AppendMenuW(hMenu, MF_STRING, IDC_ADD_PLAYLIST, L"Add to Playlist");
-                AppendMenuW(hMenu, MF_STRING, IDC_PLAY_NOW, L"Play Now");
-                POINT pt;
-                GetCursorPos(&pt);
-                TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
-                DestroyMenu(hMenu);
-            }
-            return 0;
-        }
         else if (nm->idFrom == IDC_RESULTS_LIST && nm->code == LVN_COLUMNCLICK) {
             auto* nmlv = reinterpret_cast<LPNMLISTVIEW>(lParam);
             if (!dd) return 0;
@@ -520,56 +642,7 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 dd->sort_ascending = true;
             }
 
-            if (dd->mode == MODE_TRACKS) {
-                auto col = dd->sort_column;
-                auto asc = dd->sort_ascending;
-                std::stable_sort(dd->track_results.begin(), dd->track_results.end(), [col, asc](const QobuzTrack& a, const QobuzTrack& b) {
-                    int cmp = 0;
-                    if (col == COL_TITLE) cmp = _stricmp(a.title.c_str(), b.title.c_str());
-                    else if (col == COL_ARTIST) cmp = _stricmp(a.artist.c_str(), b.artist.c_str());
-                    else if (col == COL_ALBUM) cmp = _stricmp(a.album.c_str(), b.album.c_str());
-                    else if (col == COL_DURATION) cmp = (a.duration < b.duration) ? -1 : (a.duration > b.duration ? 1 : 0);
-                    else if (col == COL_HIRES) {
-                        bool a_hr = (a.bit_depth > 16 || a.sampling_rate > 44.1);
-                        bool b_hr = (b.bit_depth > 16 || b.sampling_rate > 44.1);
-                        cmp = (a_hr == b_hr) ? 0 : (a_hr ? 1 : -1);
-                    }
-                    else if (col == COL_QUALITY) {
-                        if (a.bit_depth != b.bit_depth) cmp = a.bit_depth < b.bit_depth ? -1 : 1;
-                        else cmp = (a.sampling_rate < b.sampling_rate) ? -1 : (a.sampling_rate > b.sampling_rate ? 1 : 0);
-                    }
-                    else if (col == COL_DATE) cmp = _stricmp(a.date.c_str(), b.date.c_str());
-
-                    if (cmp == 0) return false;
-                    return asc ? (cmp < 0) : (cmp > 0);
-                });
-                populate_tracks(nm->hwndFrom, dd->track_results);
-            } else if (dd->mode == MODE_ALBUMS) {
-                auto col = dd->sort_column;
-                auto asc = dd->sort_ascending;
-                std::stable_sort(dd->album_results.begin(), dd->album_results.end(), [col, asc](const QobuzAlbum& a, const QobuzAlbum& b) {
-                    int cmp = 0;
-                    if (col == COL_A_TITLE) cmp = _stricmp(a.title.c_str(), b.title.c_str());
-                    else if (col == COL_A_ARTIST) cmp = _stricmp(a.artist.c_str(), b.artist.c_str());
-                    else if (col == COL_A_TRACKS) cmp = (a.tracks_count < b.tracks_count) ? -1 : (a.tracks_count > b.tracks_count ? 1 : 0);
-                    else if (col == COL_A_YEAR) cmp = (a.year < b.year) ? -1 : (a.year > b.year ? 1 : 0);
-                    else if (col == COL_A_HIRES) {
-                        bool a_hr = (a.bit_depth > 16 || a.sampling_rate > 44.1);
-                        bool b_hr = (b.bit_depth > 16 || b.sampling_rate > 44.1);
-                        cmp = (a_hr == b_hr) ? 0 : (a_hr ? 1 : -1);
-                    }
-                    else if (col == COL_A_QUALITY) {
-                        if (a.bit_depth != b.bit_depth) cmp = a.bit_depth < b.bit_depth ? -1 : 1;
-                        else cmp = (a.sampling_rate < b.sampling_rate) ? -1 : (a.sampling_rate > b.sampling_rate ? 1 : 0);
-                    }
-
-                    if (cmp == 0) return false;
-                    return asc ? (cmp < 0) : (cmp > 0);
-                });
-                populate_albums(nm->hwndFrom, dd->album_results);
-            }
-
-            update_header_sort_icon(nm->hwndFrom, dd->sort_column, dd->sort_ascending);
+            apply_filter_and_refresh(hwnd, dd);
             return 0;
         }
         break;
@@ -578,11 +651,8 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     case WM_SEARCH_RESULTS: {
         auto* results = reinterpret_cast<std::vector<QobuzTrack>*>(lParam);
         if (dd && results) {
-            dd->track_results = std::move(*results);
-            wchar_t status[64];
-            _snwprintf_s(status, 64, L"%d track(s) found.", (int)dd->track_results.size());
-            SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, status);
-            populate_tracks(GetDlgItem(hwnd, IDC_RESULTS_LIST), dd->track_results);
+            dd->raw_track_results = std::move(*results);
+            sort_and_refresh_tracks(hwnd, dd);
         }
         delete results;
         return 0;
@@ -608,11 +678,8 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     case WM_SEARCH_ALBUMS: {
         auto* results = reinterpret_cast<std::vector<QobuzAlbum>*>(lParam);
         if (dd && results) {
-            dd->album_results = std::move(*results);
-            wchar_t status[64];
-            _snwprintf_s(status, 64, L"%d album(s) found.", (int)dd->album_results.size());
-            SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, status);
-            populate_albums(GetDlgItem(hwnd, IDC_RESULTS_LIST), dd->album_results);
+            dd->raw_album_results = std::move(*results);
+            sort_and_refresh_albums(hwnd, dd);
         }
         delete results;
         return 0;

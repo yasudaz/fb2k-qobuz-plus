@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Carl Kittelberger <icedream@icedream.pw>
+// SPDX-FileCopyrightText: 2026 yasudaz <https://github.com/yasudaz>
 
 #pragma once
 
@@ -8,6 +9,8 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <map>
+#include <ctime>
 
 struct QobuzTrack {
     // Core identity (populated by search results and track/get)
@@ -56,6 +59,7 @@ public:
     std::vector<QobuzTrack> get_playlist_tracks(const char* playlist_id, abort_callback& abort);
 
     std::vector<QobuzAlbum> get_favorite_albums(abort_callback &abort);
+    void                    prefetch_track_url(const char* track_id, int format_id);
 
 private:
     std::string              m_app_id;
@@ -63,6 +67,13 @@ private:
     std::string              m_secret;   // last known-good secret (cache)
     std::mutex               m_init_mutex;
     bool                     m_initialized = false;
+
+    struct StreamUrlCacheEntry {
+        pfc::string8 url;
+        std::time_t  expires_at = 0;
+    };
+    std::mutex m_cache_mutex;
+    std::map<std::pair<std::string, int>, StreamUrlCacheEntry> m_stream_url_cache;
 
     void ensure_initialized(abort_callback& abort);
     std::string do_get(const char* url, abort_callback& abort);

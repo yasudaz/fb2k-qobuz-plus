@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Carl Kittelberger <icedream@icedream.pw>
+// SPDX-FileCopyrightText: 2026 yasudaz <https://github.com/yasudaz>
+
+#include "winres.h"
 #include "resource.h"
 
 IDD_QOBUZ_SEARCH DIALOGEX 0, 0, 480, 300
@@ -13,8 +18,9 @@ BEGIN
                     BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 7, 27, 40, 10
     CONTROL         "Albums", IDC_TYPE_ALBUMS, "Button",
                     BS_AUTORADIOBUTTON | WS_TABSTOP, 52, 27, 40, 10
+    AUTOCHECKBOX    "Hi-Res only", IDC_CHECK_HIRES, 98, 27, 52, 10, WS_TABSTOP
 
-    LTEXT           "", IDC_STATUS_TEXT, 100, 27, 373, 10
+    LTEXT           "", IDC_STATUS_TEXT, 155, 27, 318, 10
 
     CONTROL         "", IDC_RESULTS_LIST, "SysListView32",
                     LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP | WS_VSCROLL,
