@@ -6,7 +6,7 @@
 
 DECLARE_COMPONENT_VERSION(
     "Qobuz Streaming",
-    "0.1.2",
+    "0.1.3",
     "Streams music from Qobuz.\n"
     "Configure credentials under Advanced Preferences > Tools > Qobuz.\n"
     "Use View > Qobuz > Search... to search and add tracks to a playlist."
