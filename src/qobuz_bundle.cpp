@@ -159,8 +159,8 @@ BundleCredentials fetch_bundle_credentials(abort_callback& abort) {
 
     std::string bundle_url = "https://play.qobuz.com" + bundle_path;
 
-    // ---- Step 2: fetch first 3 MB of bundle.js (all credentials appear within 2.2 MB) ---
-    const size_t BUNDLE_LIMIT = 3 * 1024 * 1024;
+    // ---- Step 2: fetch first 20 MB of bundle.js (credentials currently appear around 3.4 MB) ---
+    const size_t BUNDLE_LIMIT = 20 * 1024 * 1024;
     std::string bundle = winhttp_get(bundle_url.c_str(), BUNDLE_LIMIT);
     if (bundle.size() < 100000)
         throw std::runtime_error("fetch_bundle_credentials: bundle too small, unexpected response");

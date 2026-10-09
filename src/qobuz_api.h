@@ -55,6 +55,8 @@ public:
     std::vector<QobuzTrack> get_album_tracks(const char* album_id, abort_callback& abort);
     std::vector<QobuzTrack> get_playlist_tracks(const char* playlist_id, abort_callback& abort);
 
+    std::vector<QobuzAlbum> get_favorite_albums(abort_callback &abort);
+
 private:
     std::string              m_app_id;
     std::vector<std::string> m_secrets;

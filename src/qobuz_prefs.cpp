@@ -51,11 +51,24 @@ public:
         return state;
     }
 
+    static std::string get_trimmed_text(HWND hwnd, int id) {
+        HWND hCtrl = GetDlgItem(hwnd, id);
+        if (!hCtrl) return "";
+        int len = GetWindowTextLengthW(hCtrl);
+        if (len <= 0) return "";
+        std::wstring wbuf(len + 1, L'\0');
+        GetWindowTextW(hCtrl, &wbuf[0], len + 1);
+        pfc::stringcvt::string_utf8_from_wide u8(wbuf.c_str());
+        std::string s = u8.get_ptr();
+        auto start = s.find_first_not_of(" \t\r\n\"'");
+        if (start == std::string::npos) return "";
+        auto end = s.find_last_not_of(" \t\r\n\"'");
+        return s.substr(start, end - start + 1);
+    }
+
     void apply() override {
         // Auth token
-        int len = GetWindowTextLengthA(GetDlgItem(m_wnd, IDC_PREFS_AUTH_EDIT));
-        std::string auth(len, '\0');
-        GetDlgItemTextA(m_wnd, IDC_PREFS_AUTH_EDIT, &auth[0], len + 1);
+        std::string auth = get_trimmed_text(m_wnd, IDC_PREFS_AUTH_EDIT);
         cfg_auth_token().set(auth.c_str());
 
         // Quality
@@ -64,15 +77,11 @@ public:
             cfg_quality().set(k_qualities[sel].format_id);
 
         // App ID override
-        len = GetWindowTextLengthA(GetDlgItem(m_wnd, IDC_PREFS_APPID_EDT));
-        std::string app_id(len, '\0');
-        GetDlgItemTextA(m_wnd, IDC_PREFS_APPID_EDT, &app_id[0], len + 1);
+        std::string app_id = get_trimmed_text(m_wnd, IDC_PREFS_APPID_EDT);
         cfg_app_id().set(app_id.c_str());
 
         // Secret override
-        len = GetWindowTextLengthA(GetDlgItem(m_wnd, IDC_PREFS_SECRET_EDT));
-        std::string secret(len, '\0');
-        GetDlgItemTextA(m_wnd, IDC_PREFS_SECRET_EDT, &secret[0], len + 1);
+        std::string secret = get_trimmed_text(m_wnd, IDC_PREFS_SECRET_EDT);
         cfg_secret().set(secret.c_str());
 
         // Search limit

@@ -156,13 +156,22 @@ static std::pair<DWORD, std::string> winhttp_api_get(
 
 QobuzAPI g_qobuz_api;
 
+static std::string trim_token(const std::string& s) {
+    auto start = s.find_first_not_of(" \t\r\n\"'");
+    if (start == std::string::npos) return "";
+    auto end = s.find_last_not_of(" \t\r\n\"'");
+    return s.substr(start, end - start + 1);
+}
+
 std::string QobuzAPI::do_get(const char* url, abort_callback& /*abort*/) {
     pfc::string8 auth_token;
     g_cfg_auth_token.get(auth_token);
 
+    std::string token_str = trim_token(auth_token.c_str());
+
     auto [status, body] = winhttp_api_get(url, {
         {"X-App-Id",          m_app_id},
-        {"X-User-Auth-Token", std::string(auth_token.c_str())}
+        {"X-User-Auth-Token", token_str}
     });
 
     if (status < 200 || status >= 300) {
@@ -192,18 +201,29 @@ void QobuzAPI::ensure_initialized(abort_callback& abort) {
 
     pfc::string8 auth_token;
     g_cfg_auth_token.get(auth_token);
-    if (auth_token.is_empty())
+    std::string token_str = trim_token(auth_token.c_str());
+    if (token_str.empty())
         throw std::runtime_error(
             "Qobuz auth token is not configured. "
-            "Go to File > Preferences > Advanced > Tools > Qobuz.");
+            "Go to File > Preferences > Tools > Qobuz.");
 
-    // Read manual overrides (used as fallback only — Qobuz rotates app_id/secrets).
+    // Read manual overrides.
     pfc::string8 manual_app_id, manual_secret;
     g_cfg_app_id.get(manual_app_id);
     g_cfg_secret.get(manual_secret);
 
-    // Always try to auto-fetch fresh credentials from the web-player bundle first.
-    // Manual credentials are fallback only because Qobuz rotates app_id/secrets.
+    std::string man_app_id_str = trim_token(manual_app_id.c_str());
+    std::string man_secret_str = trim_token(manual_secret.c_str());
+
+    // If user provided manual overrides for both App ID and Secret, prioritize them.
+    if (!man_app_id_str.empty() && !man_secret_str.empty()) {
+        m_app_id = man_app_id_str;
+        m_secrets = { man_secret_str };
+        m_initialized = true;
+        return;
+    }
+
+    // Otherwise, auto-fetch credentials from the web player bundle.
     try {
         BundleCredentials creds = fetch_bundle_credentials(abort);
         m_app_id  = creds.app_id;
@@ -212,14 +232,14 @@ void QobuzAPI::ensure_initialized(abort_callback& abort) {
         return;
     } catch (std::exception const& e) {
         // Bundle fetch failed — fall back to manual credentials if set.
-        if (!manual_app_id.is_empty()) m_app_id = manual_app_id.c_str();
-        if (!manual_secret.is_empty()) m_secrets = { std::string(manual_secret.c_str()) };
+        if (!man_app_id_str.empty()) m_app_id = man_app_id_str;
+        if (!man_secret_str.empty()) m_secrets = { man_secret_str };
 
         if (m_app_id.empty() || m_secrets.empty()) {
             throw std::runtime_error(
                 std::string("Failed to fetch Qobuz credentials from bundle: ") + e.what() +
                 "\nYou can set App ID and Secret manually in "
-                "Advanced > Tools > Qobuz as a fallback.");
+                "Preferences > Tools > Qobuz as a fallback.");
         }
         m_initialized = true;
     }
@@ -231,7 +251,7 @@ pfc::string8 QobuzAPI::get_track_url(const char* track_id, int format_id,
 
     pfc::string8 auth_token;
     g_cfg_auth_token.get(auth_token);
-    std::string auth_token_str = auth_token.c_str();
+    std::string auth_token_str = trim_token(auth_token.c_str());
 
     // Build ordered list of secrets to try: cached winner first, then rest.
     std::vector<std::string> to_try;
@@ -568,6 +588,52 @@ std::vector<QobuzTrack> QobuzAPI::get_playlist_tracks(const char* playlist_id,
             total = j["tracks"]["total"].get<int>();
         offset += (int)items.size();
         if (offset >= total || items.empty()) break;
+    }
+    return out;
+}
+
+std::vector<QobuzAlbum> QobuzAPI::get_favorite_albums(abort_callback& abort) {
+    ensure_initialized(abort);
+
+    std::vector<QobuzAlbum> out;
+    int offset = 0;
+    static constexpr int page_size = 100;
+
+    for (;;) {
+        std::string url =
+            std::string("https://www.qobuz.com/api.json/0.2/favorite/getUserFavorites")
+            + "?type=albums"
+            + "&limit="  + std::to_string(page_size)
+            + "&offset=" + std::to_string(offset)
+            + "&app_id=" + m_app_id;
+
+        auto j = json::parse(do_get(url.c_str(), abort));
+        if (!j.contains("albums") || !j["albums"].contains("items")) break;
+
+        const auto& items = j["albums"]["items"];
+        for (auto& a : items) {
+            if (a.is_null()) continue;
+            QobuzAlbum al;
+            al.id     = jstr(a, "id");
+            al.title  = jstr(a, "title");
+            al.artist = jstr_nested(a, "artist", "name");
+            if (a.contains("tracks_count") && a["tracks_count"].is_number())
+                al.tracks_count = a["tracks_count"].get<int>();
+            if (a.contains("released_at") && a["released_at"].is_number())
+                al.year = (int)(a["released_at"].get<long long>() / 31536000L + 1970);
+            al.bit_depth     = jint(a, "maximum_bit_depth", 0);
+            al.sampling_rate = jdbl(a, "maximum_sampling_rate", 0.0);
+            out.push_back(al);
+        }
+
+        int total = 0;
+        if (j["albums"].contains("total") && j["albums"]["total"].is_number())
+            total = j["albums"]["total"].get<int>();
+        
+        offset += (int)items.size();
+        if (offset >= total || items.empty()) break;
+        
+        abort.check();
     }
     return out;
 }

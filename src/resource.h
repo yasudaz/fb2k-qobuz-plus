@@ -101,6 +101,7 @@
 #define IDC_TYPE_TRACKS     1008
 #define IDC_TYPE_ALBUMS     1009
 #define IDC_STATUS_TEXT     1010
+#define IDC_ADD_FAVORITES_BTN 1011
 
 // Preferences dialog
 #define IDD_QOBUZ_PREFS     1020
