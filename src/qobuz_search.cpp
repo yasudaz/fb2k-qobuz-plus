@@ -8,6 +8,9 @@
 
 #include <commctrl.h>
 #include <windowsx.h>
+#include <shellapi.h>
+#include <gdiplus.h>
+#include "qobuz_html_view.h"
 #include <thread>
 #include <atomic>
 #include <mutex>
@@ -100,6 +103,9 @@ static void add_tracks_to_playlist(const std::vector<QobuzTrack>& tracks, bool p
 #define WM_SEARCH_ALBUMS   (WM_APP + 2)  // LPARAM = new std::vector<QobuzAlbum>*
 #define WM_SEARCH_STATUS   (WM_APP + 3)  // LPARAM = new std::string* (status text)
 #define WM_SEARCH_ERROR    (WM_APP + 4)  // LPARAM = new std::string* (error text)
+#define WM_ALBUM_DETAILS   (WM_APP + 5)  // LPARAM = new QobuzAlbumDetails*
+#define WM_TRACK_DETAILS   (WM_APP + 6)  // LPARAM = new QobuzTrackDetails*
+#define WM_ART_LOADED      (WM_APP + 7)  // LPARAM = new std::string* (raw image data)
 
 struct SearchState {
     HWND  hwnd        = nullptr;
@@ -117,7 +123,7 @@ enum AlbumCol { COL_A_TITLE=0, COL_A_ARTIST, COL_A_TRACKS, COL_A_YEAR, COL_A_HIR
 enum SearchMode { MODE_TRACKS, MODE_ALBUMS };
 
 struct DialogData {
-    SearchMode mode = MODE_TRACKS;
+    SearchMode mode = MODE_ALBUMS;
     bool filter_hires = false;
     std::vector<QobuzTrack>  raw_track_results;
     std::vector<QobuzAlbum>  raw_album_results;
@@ -251,6 +257,66 @@ static std::wstring format_quality_str(int bit_depth, double sampling_rate) {
 
 static std::wstring format_quality(const QobuzTrack& t) {
     return format_quality_str(t.bit_depth, t.sampling_rate);
+}
+
+// ---- GDI+ Image Helpers --------------------------------------------------
+
+static ULONG_PTR g_gdiplusToken = 0;
+static void ensure_gdiplus() {
+    static std::once_flag flag;
+    std::call_once(flag, []() {
+        Gdiplus::GdiplusStartupInput input;
+        Gdiplus::GdiplusStartup(&g_gdiplusToken, &input, nullptr);
+    });
+}
+
+static Gdiplus::Bitmap* load_bitmap_from_memory(const void* data, size_t size) {
+    if (!data || size == 0) return nullptr;
+    HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!hGlobal) return nullptr;
+    void* pMem = GlobalLock(hGlobal);
+    if (!pMem) {
+        GlobalFree(hGlobal);
+        return nullptr;
+    }
+    memcpy(pMem, data, size);
+    GlobalUnlock(hGlobal);
+
+    IStream* pStream = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(hGlobal, TRUE, &pStream))) {
+        GlobalFree(hGlobal);
+        return nullptr;
+    }
+    ensure_gdiplus();
+    Gdiplus::Bitmap* bmp = Gdiplus::Bitmap::FromStream(pStream);
+    pStream->Release();
+    if (bmp && bmp->GetLastStatus() != Gdiplus::Ok) {
+        delete bmp;
+        return nullptr;
+    }
+    return bmp;
+}
+
+static void draw_bitmap_fitted(HDC hdc, Gdiplus::Bitmap* bmp, const RECT& rcDest) {
+    if (!bmp) return;
+    int destW = rcDest.right - rcDest.left;
+    int destH = rcDest.bottom - rcDest.top;
+    if (destW <= 0 || destH <= 0) return;
+
+    int bmpW = bmp->GetWidth();
+    int bmpH = bmp->GetHeight();
+    if (bmpW <= 0 || bmpH <= 0) return;
+
+    float scale = (std::min)((float)destW / bmpW, (float)destH / bmpH);
+    int drawW = (int)(bmpW * scale);
+    int drawH = (int)(bmpH * scale);
+    int drawX = rcDest.left + (destW - drawW) / 2;
+    int drawY = rcDest.top + (destH - drawH) / 2;
+
+    ensure_gdiplus();
+    Gdiplus::Graphics g(hdc);
+    g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    g.DrawImage(bmp, drawX, drawY, drawW, drawH);
 }
 
 static void populate_tracks(HWND lv, const std::vector<QobuzTrack>& tracks) {
@@ -419,6 +485,683 @@ static void apply_filter_and_refresh(HWND hwnd, DialogData* dd) {
     }
 }
 
+// ---- Art Viewer Dialog Proc ---------------------------------------------
+
+struct ArtViewerState {
+    std::string title;
+    std::string cover_url;
+    Gdiplus::Bitmap* bmp = nullptr;
+};
+
+static INT_PTR CALLBACK ArtViewerDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* state = reinterpret_cast<ArtViewerState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    switch (msg) {
+    case WM_INITDIALOG: {
+        state = reinterpret_cast<ArtViewerState*>(lParam);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)state);
+        if (!state) return TRUE;
+
+        std::wstring wtitle = L"Album Art";
+        if (!state->title.empty()) {
+            wtitle += L" - " + to_wide(state->title);
+        }
+        SetWindowTextW(hwnd, wtitle.c_str());
+
+        if (!state->cover_url.empty()) {
+            std::string url = state->cover_url;
+            HWND hwnd_copy = hwnd;
+            std::thread([url, hwnd_copy]() {
+                try {
+                    std::string data = g_qobuz_api.download_url(url.c_str());
+                    if (!data.empty()) {
+                        auto* heap_data = new std::string(std::move(data));
+                        PostMessageW(hwnd_copy, WM_ART_LOADED, 0, (LPARAM)heap_data);
+                    }
+                } catch (...) {}
+            }).detach();
+        }
+        return TRUE;
+    }
+
+    case WM_ART_LOADED: {
+        auto* data = reinterpret_cast<std::string*>(lParam);
+        if (state && data) {
+            delete state->bmp;
+            state->bmp = load_bitmap_from_memory(data->data(), data->size());
+            delete data;
+            InvalidateRect(hwnd, NULL, TRUE);
+        }
+        return 0;
+    }
+
+    case WM_DRAWITEM: {
+        auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+        if (dis->CtlID == IDC_ART_VIEWER_IMAGE) {
+            FillRect(dis->hDC, &dis->rcItem, (HBRUSH)GetStockObject(BLACK_BRUSH));
+            if (state && state->bmp) {
+                draw_bitmap_fitted(dis->hDC, state->bmp, dis->rcItem);
+            }
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_SIZE: {
+        HWND hImg = GetDlgItem(hwnd, IDC_ART_VIEWER_IMAGE);
+        if (hImg) {
+            MoveWindow(hImg, 0, 0, LOWORD(lParam), HIWORD(lParam), TRUE);
+        }
+        InvalidateRect(hwnd, NULL, TRUE);
+        return 0;
+    }
+
+    case WM_COMMAND: {
+        if (LOWORD(wParam) == IDCANCEL || LOWORD(wParam) == IDOK) {
+            EndDialog(hwnd, 0);
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_DESTROY: {
+        if (state) {
+            delete state->bmp;
+            state->bmp = nullptr;
+        }
+        return 0;
+    }
+    }
+    return FALSE;
+}
+
+static void show_album_art_window(HWND parent, const std::string& title, const std::string& cover_url) {
+    if (cover_url.empty()) {
+        popup_message::g_show("Cover art URL is not available.", "Qobuz", popup_message::icon_information);
+        return;
+    }
+    ArtViewerState state;
+    state.title = title;
+    state.cover_url = cover_url;
+    DialogBoxParamW(core_api::get_my_instance(),
+                    MAKEINTRESOURCEW(IDD_QOBUZ_ART_VIEWER),
+                    parent, ArtViewerDlgProc, (LPARAM)&state);
+}
+
+// ---- Album Details Dialog Proc -------------------------------------------
+
+// Modular switch: set to 1 for HTML web view overlay, 0 to easily disable and use native edit control
+#define ENABLE_HTML_DESCRIPTION 1
+
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+
+static inline POINT dlu_to_px(HWND hwnd, int dluX, int dluY) {
+    RECT rc = { 0, 0, dluX, dluY };
+    MapDialogRect(hwnd, &rc);
+    return { rc.right, rc.bottom };
+}
+
+static std::string strip_html_tags(const std::string& input) {
+    if (input.empty()) return "";
+
+    std::string s;
+    s.reserve(input.size());
+
+    size_t i = 0;
+    while (i < input.size()) {
+        if (input[i] == '<') {
+            size_t close = input.find('>', i);
+            if (close == std::string::npos) break;
+
+            std::string tag = input.substr(i + 1, close - i - 1);
+            for (auto& c : tag) c = (char)tolower((unsigned char)c);
+
+            if (tag == "br" || tag == "br/" || tag == "br /") {
+                s += "\r\n";
+            } else if (tag == "/p" || tag == "/div" || tag == "p" || tag == "div") {
+                s += "\r\n";
+            } else if (tag == "li") {
+                s += "\r\n• ";
+            }
+            i = close + 1;
+        } else if (input[i] == '&') {
+            size_t semi = input.find(';', i);
+            if (semi != std::string::npos && semi - i < 10) {
+                std::string ent = input.substr(i, semi - i + 1);
+                if (ent == "&amp;") s += '&';
+                else if (ent == "&lt;") s += '<';
+                else if (ent == "&gt;") s += '>';
+                else if (ent == "&quot;") s += '"';
+                else if (ent == "&#39;" || ent == "&apos;") s += '\'';
+                else if (ent == "&nbsp;") s += ' ';
+                else s += ' ';
+                i = semi + 1;
+            } else {
+                s += input[i++];
+            }
+        } else {
+            s += input[i++];
+        }
+    }
+
+    std::string cleaned;
+    cleaned.reserve(s.size());
+    int consecutive_newlines = 0;
+    for (char c : s) {
+        if (c == '\r') continue;
+        if (c == '\n') {
+            consecutive_newlines++;
+            if (consecutive_newlines <= 2) {
+                cleaned += "\r\n";
+            }
+        } else {
+            consecutive_newlines = 0;
+            cleaned += c;
+        }
+    }
+
+    size_t start = cleaned.find_first_not_of(" \t\r\n");
+    if (start != std::string::npos) {
+        cleaned = cleaned.substr(start);
+    }
+    size_t end = cleaned.find_last_not_of(" \t\r\n");
+    if (end != std::string::npos) {
+        cleaned = cleaned.substr(0, end + 1);
+    }
+    return cleaned;
+}
+
+struct AlbumDetailsDlgState {
+    QobuzAlbumDetails* details = nullptr;
+    Gdiplus::Bitmap*   art_bmp = nullptr;
+#if ENABLE_HTML_DESCRIPTION
+    HWND               hHtmlHost = nullptr;
+#endif
+};
+
+static INT_PTR CALLBACK AlbumDetailsDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* state = reinterpret_cast<AlbumDetailsDlgState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    switch (msg) {
+    case WM_INITDIALOG: {
+        auto* details = reinterpret_cast<QobuzAlbumDetails*>(lParam);
+        state = new AlbumDetailsDlgState();
+        state->details = details;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)state);
+        if (!details) return TRUE;
+
+        // Title (with subtitle if present)
+        std::string full_title = details->title;
+        if (!details->subtitle.empty()) {
+            full_title += " (" + details->subtitle + ")";
+        }
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_TITLE, to_wide(full_title).c_str());
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_ARTIST, to_wide(details->artist).c_str());
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_COMPOSER, to_wide(details->composer).c_str());
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_LABEL, to_wide(details->label).c_str());
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_GENRE, to_wide(details->genre).c_str());
+
+        // Release date
+        std::string rel_date = details->release_date_original;
+        if (rel_date.empty()) rel_date = details->release_date_stream;
+        if (!details->release_type.empty()) {
+            if (!rel_date.empty()) rel_date += " ";
+            rel_date += "[" + details->release_type + "]";
+        }
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_RELEASE_DATE, to_wide(rel_date).c_str());
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_UPC, to_wide(details->upc).c_str());
+
+        // Audio specifications
+        std::wstring specs = format_quality_str(details->bit_depth, details->sampling_rate);
+        if (details->channels > 0) {
+            specs += (details->channels == 1) ? L" Mono" : (details->channels == 2) ? L" Stereo" : L" Multi-ch";
+        }
+        if (details->hires) {
+            specs += L" (Hi-Res)";
+        }
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_SPECS, specs.c_str());
+
+        // Volume (tracks / discs / duration)
+        std::wstring vol_str = std::to_wstring(details->tracks_count) + L" track" + (details->tracks_count != 1 ? L"s" : L"");
+        if (details->media_count > 1) {
+            vol_str += L" (" + std::to_wstring(details->media_count) + L" discs)";
+        }
+        if (details->duration > 0.0) {
+            vol_str += L" - " + format_duration(details->duration);
+        }
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_TRACKS_DUR, vol_str.c_str());
+
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_COPYRIGHT, to_wide(details->copyright).c_str());
+
+        // Credits / Performers
+        std::string credits_str;
+        for (const auto& ar : details->artists_roles) {
+            credits_str += ar.name;
+            if (!ar.roles.empty()) {
+                credits_str += " (" + ar.roles + ")";
+            }
+            credits_str += "\r\n";
+        }
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_CREDITS, to_wide(credits_str).c_str());
+
+        // Description / Review: Set clean plain text to standard EDIT control
+        std::string plain_desc = strip_html_tags(details->description);
+        SetDlgItemTextW(hwnd, IDC_ALBUM_INFO_DESC, to_wide(plain_desc).c_str());
+
+#if ENABLE_HTML_DESCRIPTION
+        // Dynamically create HTML host window overlaid over the EDIT control
+        if (!details->description.empty()) {
+            HWND hDesc = GetDlgItem(hwnd, IDC_ALBUM_INFO_DESC);
+            if (hDesc) {
+                RECT rc = {};
+                GetWindowRect(hDesc, &rc);
+                MapWindowPoints(NULL, hwnd, (LPPOINT)&rc, 2);
+
+                RegisterHtmlHostWindowClass(core_api::get_my_instance());
+
+                HWND hHtml = CreateWindowExW(
+                    WS_EX_CLIENTEDGE,
+                    L"QobuzHtmlHostWindow",
+                    L"",
+                    WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                    rc.left, rc.top,
+                    rc.right - rc.left, rc.bottom - rc.top,
+                    hwnd,
+                    (HMENU)(UINT_PTR)IDC_ALBUM_INFO_DESC_HTML,
+                    core_api::get_my_instance(),
+                    nullptr
+                );
+
+                if (hHtml) {
+                    state->hHtmlHost = hHtml;
+                    SendMessageW(hHtml, WM_HTMLVIEW_SETHTML, 0, (LPARAM)details->description.c_str());
+                    ShowWindow(hDesc, SW_HIDE);
+                }
+            }
+        }
+#endif
+
+        // Cover art download
+        if (!details->cover_url.empty()) {
+            std::string url = details->cover_url;
+            HWND hwnd_copy = hwnd;
+            std::thread([url, hwnd_copy]() {
+                try {
+                    std::string data = g_qobuz_api.download_url(url.c_str());
+                    if (!data.empty()) {
+                        auto* heap_data = new std::string(std::move(data));
+                        PostMessageW(hwnd_copy, WM_ART_LOADED, 0, (LPARAM)heap_data);
+                    }
+                } catch (...) {}
+            }).detach();
+        } else {
+            EnableWindow(GetDlgItem(hwnd, IDC_ALBUM_INFO_ART_BTN), FALSE);
+        }
+
+        if (details->url.empty()) {
+            EnableWindow(GetDlgItem(hwnd, IDC_ALBUM_INFO_WEB_BTN), FALSE);
+        }
+
+        // Trigger initial layout
+        RECT rc = {};
+        GetClientRect(hwnd, &rc);
+        SendMessageW(hwnd, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
+
+        return TRUE;
+    }
+
+    case WM_ART_LOADED: {
+        auto* data = reinterpret_cast<std::string*>(lParam);
+        if (state && data) {
+            delete state->art_bmp;
+            state->art_bmp = load_bitmap_from_memory(data->data(), data->size());
+            delete data;
+            HWND hArt = GetDlgItem(hwnd, IDC_ALBUM_INFO_ART);
+            if (hArt) InvalidateRect(hArt, NULL, TRUE);
+        }
+        return 0;
+    }
+
+    case WM_DRAWITEM: {
+        auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+        if (dis->CtlID == IDC_ALBUM_INFO_ART) {
+            FillRect(dis->hDC, &dis->rcItem, (HBRUSH)GetStockObject(BLACK_BRUSH));
+            if (state && state->art_bmp) {
+                draw_bitmap_fitted(dis->hDC, state->art_bmp, dis->rcItem);
+            }
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_DPICHANGED: {
+        auto* prc = reinterpret_cast<RECT*>(lParam);
+        if (prc) {
+            SetWindowPos(hwnd, NULL,
+                         prc->left, prc->top,
+                         prc->right - prc->left, prc->bottom - prc->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        return 0;
+    }
+
+    case WM_SIZE: {
+        int cx = LOWORD(lParam);
+        int cy = HIWORD(lParam);
+        if (cx <= 0 || cy <= 0) return 0;
+
+        // DLU conversion measurements using the dialog's current DPI font context
+        POINT ptMargin   = dlu_to_px(hwnd, 10, 10);
+        POINT ptRow      = dlu_to_px(hwnd, 55, 18);   // lblW: 55 DLU, rowPitch: 18 DLU
+        POINT ptEditH    = dlu_to_px(hwnd, 0, 14);    // editH: 14 DLU
+        POINT ptLblH     = dlu_to_px(hwnd, 0, 10);    // lblH: 10 DLU
+        POINT ptBtnH     = dlu_to_px(hwnd, 0, 16);    // buttonH: 16 DLU
+        POINT ptGap      = dlu_to_px(hwnd, 6, 6);
+        POINT ptLeftW    = dlu_to_px(hwnd, 150, 0);   // base left pane width
+        POINT ptBtnPlay  = dlu_to_px(hwnd, 85, 0);    // Add to Playlist button width
+        POINT ptBtnWeb   = dlu_to_px(hwnd, 75, 0);    // Open in Web button width
+        POINT ptBtnClose = dlu_to_px(hwnd, 55, 0);    // Close button width
+        POINT ptBtnArt   = dlu_to_px(hwnd, 85, 0);    // Show Album Art button width
+        POINT ptMinDesc  = dlu_to_px(hwnd, 0, 40);    // minimum review area height
+        POINT ptMinCred  = dlu_to_px(hwnd, 0, 45);    // minimum credits area height
+
+        int mX = ptMargin.x;
+        int mY = ptMargin.y;
+        int rowPitch = ptRow.y;
+        int editH = ptEditH.y;
+        int lblH = ptLblH.y;
+        int lblW = ptRow.x;
+        int btnH = ptBtnH.y;
+
+        // Bottom action buttons Y
+        int btnY = cy - mY - btnH;
+
+        // ---- Left Pane (Album Art & Credits) ----
+        int leftW = (std::max)(int(ptLeftW.x), int(cx * 32 / 100));
+
+        // Album art: square at top-left, top-aligned (Y = mY)
+        // Ensure credits area below has at least ptMinCred.y
+        int maxArtH = btnY - ptGap.y - int(ptMinCred.y) - lblH - ptGap.y - btnH - ptGap.y - mY;
+        int artSize = leftW;
+        if (artSize > maxArtH) artSize = (std::max)(int(dlu_to_px(hwnd, 60, 0).x), maxArtH);
+
+        HWND hArt = GetDlgItem(hwnd, IDC_ALBUM_INFO_ART);
+        if (hArt) MoveWindow(hArt, mX, mY, artSize, artSize, TRUE);
+
+        // "Show Album Art" button below the cover art
+        int artBtnY = mY + artSize + ptGap.y;
+        int artBtnW = (std::min)(int(ptBtnArt.x), leftW);
+        int artBtnX = mX + (leftW - artBtnW) / 2;
+        HWND hArtBtn = GetDlgItem(hwnd, IDC_ALBUM_INFO_ART_BTN);
+        if (hArtBtn) MoveWindow(hArtBtn, artBtnX, artBtnY, artBtnW, btnH, TRUE);
+
+        // Credits & Performers label & edit
+        int credLblY = artBtnY + btnH + ptGap.y;
+        HWND hCredLbl = GetDlgItem(hwnd, IDC_ALBUM_INFO_LBL_CREDITS);
+        if (hCredLbl) MoveWindow(hCredLbl, mX, credLblY, leftW, lblH, TRUE);
+
+        int credEditY = credLblY + lblH + (ptGap.y / 2);
+        int credEditH = (btnY - ptGap.y) - credEditY;
+        if (credEditH < int(ptMinCred.y)) credEditH = int(ptMinCred.y);
+        HWND hCred = GetDlgItem(hwnd, IDC_ALBUM_INFO_CREDITS);
+        if (hCred) MoveWindow(hCred, mX, credEditY, leftW, credEditH, TRUE);
+
+        // ---- Right Pane (Properties & Description) ----
+        int rightX = mX + leftW + (ptGap.x * 2);
+        int rightW = cx - rightX - mX;
+        if (rightW < int(dlu_to_px(hwnd, 150, 0).x)) rightW = int(dlu_to_px(hwnd, 150, 0).x);
+
+        int editX = rightX + lblW + ptGap.x;
+        int editW = rightW - lblW - ptGap.x;
+        if (editW < int(dlu_to_px(hwnd, 50, 0).x)) editW = int(dlu_to_px(hwnd, 50, 0).x);
+
+        struct PropRow {
+            int lblId;
+            int editId;
+        };
+        const PropRow rows[] = {
+            { IDC_ALBUM_INFO_LBL_TITLE,        IDC_ALBUM_INFO_TITLE },
+            { IDC_ALBUM_INFO_LBL_ARTIST,       IDC_ALBUM_INFO_ARTIST },
+            { IDC_ALBUM_INFO_LBL_COMPOSER,     IDC_ALBUM_INFO_COMPOSER },
+            { IDC_ALBUM_INFO_LBL_LABEL,        IDC_ALBUM_INFO_LABEL },
+            { IDC_ALBUM_INFO_LBL_GENRE,        IDC_ALBUM_INFO_GENRE },
+            { IDC_ALBUM_INFO_LBL_RELEASE_DATE, IDC_ALBUM_INFO_RELEASE_DATE },
+            { IDC_ALBUM_INFO_LBL_UPC,          IDC_ALBUM_INFO_UPC },
+            { IDC_ALBUM_INFO_LBL_SPECS,        IDC_ALBUM_INFO_SPECS },
+            { IDC_ALBUM_INFO_LBL_TRACKS_DUR,   IDC_ALBUM_INFO_TRACKS_DUR },
+            { IDC_ALBUM_INFO_LBL_COPYRIGHT,    IDC_ALBUM_INFO_COPYRIGHT }
+        };
+
+        int curY = mY;
+        int lblOffset = (editH - lblH) / 2;
+
+        for (const auto& r : rows) {
+            HWND hLbl = GetDlgItem(hwnd, r.lblId);
+            if (hLbl) MoveWindow(hLbl, rightX, curY + lblOffset, lblW, lblH, TRUE);
+
+            HWND hEd = GetDlgItem(hwnd, r.editId);
+            if (hEd) MoveWindow(hEd, editX, curY, editW, editH, TRUE);
+
+            curY += rowPitch;
+        }
+
+        // Description / Review label & text
+        curY += (ptGap.y / 2);
+        HWND hDescLbl = GetDlgItem(hwnd, IDC_ALBUM_INFO_LBL_DESC);
+        if (hDescLbl) MoveWindow(hDescLbl, rightX, curY, rightW, lblH, TRUE);
+
+        int descY = curY + lblH + (ptGap.y / 2);
+        int descH = (btnY - ptGap.y) - descY;
+        if (descH < int(ptMinDesc.y)) descH = int(ptMinDesc.y);
+
+        HWND hDesc = GetDlgItem(hwnd, IDC_ALBUM_INFO_DESC);
+        if (hDesc) MoveWindow(hDesc, rightX, descY, rightW, descH, TRUE);
+
+#if ENABLE_HTML_DESCRIPTION
+        if (state && state->hHtmlHost) {
+            MoveWindow(state->hHtmlHost, rightX, descY, rightW, descH, TRUE);
+        }
+#endif
+
+        // Bottom action buttons
+        HWND hBtnPlay = GetDlgItem(hwnd, IDC_ALBUM_INFO_PLAYLIST_BTN);
+        if (hBtnPlay) MoveWindow(hBtnPlay, mX, btnY, ptBtnPlay.x, btnH, TRUE);
+
+        HWND hBtnWeb = GetDlgItem(hwnd, IDC_ALBUM_INFO_WEB_BTN);
+        if (hBtnWeb) MoveWindow(hBtnWeb, mX + ptBtnPlay.x + ptGap.x, btnY, ptBtnWeb.x, btnH, TRUE);
+
+        HWND hBtnClose = GetDlgItem(hwnd, IDCANCEL);
+        if (hBtnClose) MoveWindow(hBtnClose, cx - mX - ptBtnClose.x, btnY, ptBtnClose.x, btnH, TRUE);
+
+        InvalidateRect(hwnd, NULL, TRUE);
+        return 0;
+    }
+
+    case WM_COMMAND: {
+        int ctrl = LOWORD(wParam);
+
+        if (ctrl == IDCANCEL || ctrl == IDOK) {
+            EndDialog(hwnd, 0);
+            return TRUE;
+        }
+
+        if (ctrl == IDC_ALBUM_INFO_ART_BTN && state && state->details && !state->details->cover_url.empty()) {
+            show_album_art_window(hwnd, state->details->title, state->details->cover_url);
+            return TRUE;
+        }
+
+        if (ctrl == IDC_ALBUM_INFO_WEB_BTN && state && state->details && !state->details->url.empty()) {
+            ShellExecuteW(hwnd, L"open", to_wide(state->details->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            return TRUE;
+        }
+
+        if (ctrl == IDC_ALBUM_INFO_PLAYLIST_BTN && state && state->details) {
+            std::string album_id = state->details->id;
+            HWND hwnd_copy = hwnd;
+            EnableWindow(GetDlgItem(hwnd, IDC_ALBUM_INFO_PLAYLIST_BTN), FALSE);
+            std::thread([album_id, hwnd_copy]() {
+                try {
+                    abort_callback_impl abort_cb;
+                    auto tracks = g_qobuz_api.get_album_tracks(album_id.c_str(), abort_cb);
+                    fb2k::inMainThread([tracks]() {
+                        add_tracks_to_playlist(tracks, false);
+                    });
+                } catch (...) {}
+                if (IsWindow(hwnd_copy)) {
+                    EnableWindow(GetDlgItem(hwnd_copy, IDC_ALBUM_INFO_PLAYLIST_BTN), TRUE);
+                }
+            }).detach();
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_DESTROY: {
+        if (state) {
+            delete state->art_bmp;
+            state->art_bmp = nullptr;
+#if ENABLE_HTML_DESCRIPTION
+            if (state->hHtmlHost) {
+                DestroyWindow(state->hHtmlHost);
+                state->hHtmlHost = nullptr;
+            }
+#endif
+            delete state;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        }
+        return 0;
+    }
+    }
+    return FALSE;
+}
+
+// ---- Track Details Dialog Proc -------------------------------------------
+
+struct TrackDetailsDlgState {
+    QobuzTrackDetails* details = nullptr;
+};
+
+static INT_PTR CALLBACK TrackDetailsDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* state = reinterpret_cast<TrackDetailsDlgState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    switch (msg) {
+    case WM_INITDIALOG: {
+        auto* details = reinterpret_cast<QobuzTrackDetails*>(lParam);
+        state = new TrackDetailsDlgState();
+        state->details = details;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)state);
+        if (!details) return TRUE;
+
+        std::string full_title = details->title;
+        if (!details->version.empty()) {
+            full_title += " (" + details->version + ")";
+        }
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_TITLE, to_wide(full_title).c_str());
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_ARTIST, to_wide(details->performer).c_str());
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_COMPOSER, to_wide(details->composer).c_str());
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_WORK, to_wide(details->work).c_str());
+
+        std::string alb_text = details->album_title;
+        if (!details->album_artist.empty() && details->album_artist != details->performer) {
+            alb_text += " (" + details->album_artist + ")";
+        }
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_ALBUM, to_wide(alb_text).c_str());
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_LABEL, to_wide(details->label).c_str());
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_GENRE, to_wide(details->genre).c_str());
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_RELEASE_DATE, to_wide(details->release_date_original).c_str());
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_UPC, to_wide(details->upc).c_str());
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_ISRC, to_wide(details->isrc).c_str());
+
+        std::wstring specs = format_quality_str(details->bit_depth, details->sampling_rate);
+        if (details->channels > 0) {
+            specs += (details->channels == 1) ? L" Mono" : (details->channels == 2) ? L" Stereo" : L" Multi-ch";
+        }
+        if (details->hires) specs += L" (Hi-Res)";
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_SPECS, specs.c_str());
+
+        std::wstring trk_disc;
+        if (details->track_number > 0) {
+            trk_disc += L"Track " + std::to_wstring(details->track_number);
+            if (details->total_tracks > 0) trk_disc += L"/" + std::to_wstring(details->total_tracks);
+        }
+        if (details->disc_number > 0) {
+            if (!trk_disc.empty()) trk_disc += L", ";
+            trk_disc += L"Disc " + std::to_wstring(details->disc_number);
+            if (details->total_discs > 1) trk_disc += L"/" + std::to_wstring(details->total_discs);
+        }
+        if (details->duration > 0.0) {
+            if (!trk_disc.empty()) trk_disc += L" - ";
+            trk_disc += format_duration(details->duration);
+        }
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_TRACK_DISC, trk_disc.c_str());
+
+        if (details->has_rg) {
+            wchar_t rg_buf[64];
+            _snwprintf_s(rg_buf, 64, L"%.2f dB (Peak: %.4f)", details->rg_track_gain, details->rg_track_peak);
+            SetDlgItemTextW(hwnd, IDC_TRACK_INFO_REPLAYGAIN, rg_buf);
+        }
+
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_COPYRIGHT, to_wide(details->copyright).c_str());
+        SetDlgItemTextW(hwnd, IDC_TRACK_INFO_PERFORMERS, to_wide(details->performers).c_str());
+
+        if (details->cover_url.empty()) {
+            EnableWindow(GetDlgItem(hwnd, IDC_TRACK_INFO_ART_BTN), FALSE);
+        }
+        if (details->url.empty()) {
+            EnableWindow(GetDlgItem(hwnd, IDC_TRACK_INFO_WEB_BTN), FALSE);
+        }
+        return TRUE;
+    }
+
+    case WM_COMMAND: {
+        int ctrl = LOWORD(wParam);
+        if (ctrl == IDCANCEL || ctrl == IDOK) {
+            EndDialog(hwnd, 0);
+            return TRUE;
+        }
+
+        if (ctrl == IDC_TRACK_INFO_ART_BTN && state && state->details && !state->details->cover_url.empty()) {
+            show_album_art_window(hwnd, state->details->album_title, state->details->cover_url);
+            return TRUE;
+        }
+
+        if (ctrl == IDC_TRACK_INFO_WEB_BTN && state && state->details && !state->details->url.empty()) {
+            ShellExecuteW(hwnd, L"open", to_wide(state->details->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            return TRUE;
+        }
+
+        if (ctrl == IDC_TRACK_INFO_PLAYLIST_BTN && state && state->details) {
+            std::string tid = state->details->id;
+            HWND hwnd_copy = hwnd;
+            EnableWindow(GetDlgItem(hwnd, IDC_TRACK_INFO_PLAYLIST_BTN), FALSE);
+            std::thread([tid, hwnd_copy]() {
+                try {
+                    abort_callback_impl abort_cb;
+                    QobuzTrack tr = g_qobuz_api.get_track_info(tid.c_str(), abort_cb);
+                    std::vector<QobuzTrack> single = { tr };
+                    fb2k::inMainThread([single]() {
+                        add_tracks_to_playlist(single, false);
+                    });
+                } catch (...) {}
+                if (IsWindow(hwnd_copy)) {
+                    EnableWindow(GetDlgItem(hwnd_copy, IDC_TRACK_INFO_PLAYLIST_BTN), TRUE);
+                }
+            }).detach();
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_DESTROY: {
+        delete state;
+        return 0;
+    }
+    }
+    return FALSE;
+}
+
 // ---- Dialog Proc ---------------------------------------------------------
 
 static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -426,6 +1169,9 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
     switch (msg) {
     case WM_INITDIALOG: {
+        RegisterHtmlHostWindowClass();
+        ensure_gdiplus();
+
         dd = new DialogData();
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)dd);
         g_search_hwnd = hwnd;
@@ -433,14 +1179,14 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_LISTVIEW_CLASSES };
         InitCommonControlsEx(&icc);
 
-        // Default to Tracks mode
-        CheckDlgButton(hwnd, IDC_TYPE_TRACKS, BST_CHECKED);
-        CheckDlgButton(hwnd, IDC_TYPE_ALBUMS, BST_UNCHECKED);
+        // Default to Albums mode
+        CheckDlgButton(hwnd, IDC_TYPE_TRACKS, BST_UNCHECKED);
+        CheckDlgButton(hwnd, IDC_TYPE_ALBUMS, BST_CHECKED);
         CheckDlgButton(hwnd, IDC_CHECK_HIRES, BST_UNCHECKED);
 
         HWND lv = GetDlgItem(hwnd, IDC_RESULTS_LIST);
         ListView_SetExtendedListViewStyle(lv, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-        setup_track_columns(lv);
+        setup_album_columns(lv);
 
         // Register with fb2k's modeless dialog manager so keyboard input works
         modeless_dialog_manager::g_add(hwnd);
@@ -576,6 +1322,104 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             }
             return TRUE;
         }
+
+        if (ctrl == IDC_ALBUM_INFO) {
+            if (!dd) return TRUE;
+            HWND lv = GetDlgItem(hwnd, IDC_RESULTS_LIST);
+            int sel = ListView_GetNextItem(lv, -1, LVNI_SELECTED);
+            if (sel < 0) return TRUE;
+
+            std::string album_id;
+            if (dd->mode == MODE_ALBUMS && (size_t)sel < dd->album_results.size()) {
+                album_id = dd->album_results[(size_t)sel].id;
+            } else if (dd->mode == MODE_TRACKS && (size_t)sel < dd->track_results.size()) {
+                album_id = dd->track_results[(size_t)sel].album_id;
+            }
+
+            if (album_id.empty()) return TRUE;
+
+            HWND hwnd_copy = hwnd;
+            SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, L"Loading album properties...");
+            std::thread([album_id, hwnd_copy]() {
+                try {
+                    abort_callback_impl abort_cb;
+                    auto details = g_qobuz_api.get_album_details(album_id.c_str(), abort_cb);
+                    auto* heap = new QobuzAlbumDetails(std::move(details));
+                    PostMessageW(hwnd_copy, WM_ALBUM_DETAILS, 0, (LPARAM)heap);
+                } catch (std::exception const& e) {
+                    auto* msg = new std::string(e.what());
+                    PostMessageW(hwnd_copy, WM_SEARCH_ERROR, 0, (LPARAM)msg);
+                }
+            }).detach();
+            return TRUE;
+        }
+
+        if (ctrl == IDC_TRACK_INFO) {
+            if (!dd) return TRUE;
+            HWND lv = GetDlgItem(hwnd, IDC_RESULTS_LIST);
+            int sel = ListView_GetNextItem(lv, -1, LVNI_SELECTED);
+            if (sel < 0) return TRUE;
+
+            std::string track_id;
+            if (dd->mode == MODE_TRACKS && (size_t)sel < dd->track_results.size()) {
+                track_id = dd->track_results[(size_t)sel].id;
+            }
+
+            if (track_id.empty()) return TRUE;
+
+            HWND hwnd_copy = hwnd;
+            SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, L"Loading track properties...");
+            std::thread([track_id, hwnd_copy]() {
+                try {
+                    abort_callback_impl abort_cb;
+                    auto details = g_qobuz_api.get_track_details(track_id.c_str(), abort_cb);
+                    auto* heap = new QobuzTrackDetails(std::move(details));
+                    PostMessageW(hwnd_copy, WM_TRACK_DETAILS, 0, (LPARAM)heap);
+                } catch (std::exception const& e) {
+                    auto* msg = new std::string(e.what());
+                    PostMessageW(hwnd_copy, WM_SEARCH_ERROR, 0, (LPARAM)msg);
+                }
+            }).detach();
+            return TRUE;
+        }
+
+        if (ctrl == IDC_SHOW_ART) {
+            if (!dd) return TRUE;
+            HWND lv = GetDlgItem(hwnd, IDC_RESULTS_LIST);
+            int sel = ListView_GetNextItem(lv, -1, LVNI_SELECTED);
+            if (sel < 0) return TRUE;
+
+            std::string album_id;
+            std::string fallback_title;
+            if (dd->mode == MODE_ALBUMS && (size_t)sel < dd->album_results.size()) {
+                album_id = dd->album_results[(size_t)sel].id;
+                fallback_title = dd->album_results[(size_t)sel].title;
+            } else if (dd->mode == MODE_TRACKS && (size_t)sel < dd->track_results.size()) {
+                album_id = dd->track_results[(size_t)sel].album_id;
+                fallback_title = dd->track_results[(size_t)sel].album;
+            }
+
+            if (album_id.empty()) return TRUE;
+
+            HWND hwnd_copy = hwnd;
+            SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, L"Loading album art...");
+            std::thread([album_id, fallback_title, hwnd_copy]() {
+                try {
+                    abort_callback_impl abort_cb;
+                    auto details = g_qobuz_api.get_album_details(album_id.c_str(), abort_cb);
+                    std::string art_url = details.cover_url;
+                    std::string title = details.title.empty() ? fallback_title : details.title;
+                    fb2k::inMainThread([hwnd_copy, title, art_url]() {
+                        SetDlgItemTextW(hwnd_copy, IDC_STATUS_TEXT, L"");
+                        show_album_art_window(hwnd_copy, title, art_url);
+                    });
+                } catch (std::exception const& e) {
+                    auto* msg = new std::string(e.what());
+                    PostMessageW(hwnd_copy, WM_SEARCH_ERROR, 0, (LPARAM)msg);
+                }
+            }).detach();
+            return TRUE;
+        }
         break;
     }
 
@@ -624,6 +1468,12 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 HMENU hMenu = CreatePopupMenu();
                 AppendMenuW(hMenu, MF_STRING, IDC_ADD_PLAYLIST, L"Add to Playlist");
                 AppendMenuW(hMenu, MF_STRING, IDC_PLAY_NOW, L"Play Now");
+                AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+                if (dd && dd->mode == MODE_TRACKS) {
+                    AppendMenuW(hMenu, MF_STRING, IDC_TRACK_INFO, L"Track Properties...");
+                }
+                AppendMenuW(hMenu, MF_STRING, IDC_ALBUM_INFO, L"Album Properties...");
+                AppendMenuW(hMenu, MF_STRING, IDC_SHOW_ART, L"Show Album Art");
                 POINT pt;
                 GetCursorPos(&pt);
                 TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
@@ -691,6 +1541,36 @@ static INT_PTR CALLBACK SearchDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             std::wstring wmsg = to_wide(*msg);
             SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, wmsg.c_str());
             delete msg;
+        }
+        return 0;
+    }
+
+    case WM_ALBUM_DETAILS: {
+        auto* details = reinterpret_cast<QobuzAlbumDetails*>(lParam);
+        if (details) {
+            SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, L"");
+            INT_PTR ret = DialogBoxParamW(core_api::get_my_instance(),
+                                          MAKEINTRESOURCEW(IDD_QOBUZ_ALBUM_INFO),
+                                          hwnd, AlbumDetailsDlgProc, (LPARAM)details);
+            if (ret == -1) {
+                DWORD err = GetLastError();
+                pfc::string8 msg;
+                msg << "Failed to open Album Properties dialog. Error code: " << (unsigned)err;
+                popup_message::g_show(msg.c_str(), "Qobuz", popup_message::icon_error);
+            }
+            delete details;
+        }
+        return 0;
+    }
+
+    case WM_TRACK_DETAILS: {
+        auto* details = reinterpret_cast<QobuzTrackDetails*>(lParam);
+        if (details) {
+            SetDlgItemTextW(hwnd, IDC_STATUS_TEXT, L"");
+            DialogBoxParamW(core_api::get_my_instance(),
+                            MAKEINTRESOURCEW(IDD_QOBUZ_TRACK_INFO),
+                            hwnd, TrackDetailsDlgProc, (LPARAM)details);
+            delete details;
         }
         return 0;
     }

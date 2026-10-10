@@ -61,6 +61,15 @@
 #ifndef ES_NUMBER
 #define ES_NUMBER           0x2000
 #endif
+#ifndef ES_MULTILINE
+#define ES_MULTILINE        0x0004
+#endif
+#ifndef ES_READONLY
+#define ES_READONLY         0x0800
+#endif
+#ifndef ES_AUTOVSCROLL
+#define ES_AUTOVSCROLL      0x0040
+#endif
 
 // ComboBox styles
 #ifndef CBS_DROPDOWNLIST
@@ -104,6 +113,9 @@
 #define IDC_STATUS_TEXT     1010
 #define IDC_ADD_FAVORITES_BTN 1011
 #define IDC_CHECK_HIRES     1012
+#define IDC_ALBUM_INFO      1013
+#define IDC_TRACK_INFO      1014
+#define IDC_SHOW_ART        1015
 
 // Preferences dialog
 #define IDD_QOBUZ_PREFS     1020
@@ -112,3 +124,60 @@
 #define IDC_PREFS_APPID_EDT 1023
 #define IDC_PREFS_SECRET_EDT 1024
 #define IDC_PREFS_LIMIT_EDT  1025
+
+// Album Info dialog
+#define IDD_QOBUZ_ALBUM_INFO         1030
+#define IDC_ALBUM_INFO_TITLE         1031
+#define IDC_ALBUM_INFO_ARTIST        1032
+#define IDC_ALBUM_INFO_COMPOSER      1033
+#define IDC_ALBUM_INFO_LABEL         1034
+#define IDC_ALBUM_INFO_GENRE         1035
+#define IDC_ALBUM_INFO_RELEASE_DATE  1036
+#define IDC_ALBUM_INFO_UPC           1037
+#define IDC_ALBUM_INFO_SPECS         1038
+#define IDC_ALBUM_INFO_TRACKS_DUR    1039
+#define IDC_ALBUM_INFO_COPYRIGHT     1040
+#define IDC_ALBUM_INFO_CREDITS       1041
+#define IDC_ALBUM_INFO_DESC          1042
+#define IDC_ALBUM_INFO_WEB_BTN       1043
+#define IDC_ALBUM_INFO_PLAYLIST_BTN  1044
+#define IDC_ALBUM_INFO_ART           1045
+#define IDC_ALBUM_INFO_DESC_HTML     1046
+#define IDC_ALBUM_INFO_ART_BTN       1047
+#define IDC_ALBUM_INFO_LBL_TITLE         1080
+#define IDC_ALBUM_INFO_LBL_ARTIST        1081
+#define IDC_ALBUM_INFO_LBL_COMPOSER      1082
+#define IDC_ALBUM_INFO_LBL_LABEL         1083
+#define IDC_ALBUM_INFO_LBL_GENRE         1084
+#define IDC_ALBUM_INFO_LBL_RELEASE_DATE  1085
+#define IDC_ALBUM_INFO_LBL_UPC           1086
+#define IDC_ALBUM_INFO_LBL_SPECS         1087
+#define IDC_ALBUM_INFO_LBL_TRACKS_DUR    1088
+#define IDC_ALBUM_INFO_LBL_COPYRIGHT     1089
+#define IDC_ALBUM_INFO_LBL_CREDITS       1090
+#define IDC_ALBUM_INFO_LBL_DESC          1091
+
+// Track Info dialog
+#define IDD_QOBUZ_TRACK_INFO         1050
+#define IDC_TRACK_INFO_TITLE         1051
+#define IDC_TRACK_INFO_ARTIST        1052
+#define IDC_TRACK_INFO_COMPOSER      1053
+#define IDC_TRACK_INFO_WORK          1054
+#define IDC_TRACK_INFO_ALBUM         1055
+#define IDC_TRACK_INFO_LABEL         1056
+#define IDC_TRACK_INFO_GENRE         1057
+#define IDC_TRACK_INFO_RELEASE_DATE  1058
+#define IDC_TRACK_INFO_ISRC          1059
+#define IDC_TRACK_INFO_UPC           1060
+#define IDC_TRACK_INFO_SPECS         1061
+#define IDC_TRACK_INFO_TRACK_DISC    1062
+#define IDC_TRACK_INFO_REPLAYGAIN    1063
+#define IDC_TRACK_INFO_COPYRIGHT     1064
+#define IDC_TRACK_INFO_PERFORMERS    1065
+#define IDC_TRACK_INFO_PLAYLIST_BTN  1066
+#define IDC_TRACK_INFO_WEB_BTN       1067
+#define IDC_TRACK_INFO_ART_BTN       1068
+
+// Art Viewer dialog
+#define IDD_QOBUZ_ART_VIEWER         1070
+#define IDC_ART_VIEWER_IMAGE         1071

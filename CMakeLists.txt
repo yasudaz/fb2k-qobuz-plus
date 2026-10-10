@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(foo_qobuz CXX RC)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ---- Architecture detection ----------------------------------------------
@@ -269,6 +269,7 @@ if(IS_MSVC_LIKE)
     endif()
     target_link_libraries(foo_qobuz PRIVATE
         wininet.lib winhttp.lib comctl32.lib comdlg32.lib shell32.lib ole32.lib
+        oleaut32.lib gdiplus.lib
         uuid.lib shlwapi.lib winmm.lib
         # shared.dll import library — provides SHARED_EXPORT functions (uCharLower, etc.)
         "${_FB2K_SHARED_LIB}"
@@ -276,7 +277,7 @@ if(IS_MSVC_LIKE)
     target_link_options(foo_qobuz PRIVATE /DLL)
 else()
     target_link_libraries(foo_qobuz PRIVATE
-        wininet comctl32 comdlg32 shell32 ole32 uuid shlwapi winmm
+        wininet comctl32 comdlg32 shell32 ole32 oleaut32 gdiplus uuid shlwapi winmm
     )
     target_link_options(foo_qobuz PRIVATE
         -static-libgcc -static-libstdc++ -static -lwinpthread

@@ -48,14 +48,97 @@ struct QobuzAlbum {
     double      sampling_rate  = 44.1;
 };
 
+struct QobuzArtistRole {
+    std::string name;
+    std::string roles;
+};
+
+struct QobuzAlbumDetails {
+    std::string id;
+    std::string qobuz_id;
+    std::string title;
+    std::string subtitle;
+    std::string artist;
+    std::string composer;
+    std::vector<QobuzArtistRole> artists_roles;
+
+    std::string genre;
+    std::string label;
+    std::string release_type;
+    std::string release_date_original;
+    std::string release_date_stream;
+    std::string copyright;
+    std::string upc;
+
+    int         bit_depth      = 16;
+    double      sampling_rate  = 44.1;
+    int         channels       = 2;
+    std::string technical_specs;
+    bool        hires          = false;
+
+    int         tracks_count   = 0;
+    int         media_count    = 1;
+    double      duration       = 0.0;
+
+    std::string description;
+    std::string cover_url;
+    std::string url;
+    bool        parental_warning = false;
+    bool        streamable       = true;
+    bool        purchasable      = true;
+};
+
+struct QobuzTrackDetails {
+    std::string id;
+    std::string title;
+    std::string version;
+    std::string performer;
+    std::string composer;
+    std::string work;
+    std::string performers;
+    std::string isrc;
+    std::string copyright;
+
+    int         track_number  = 0;
+    int         disc_number   = 1;
+    double      duration      = 0.0;
+    int         bit_depth     = 16;
+    double      sampling_rate = 44.1;
+    int         channels      = 2;
+    std::string technical_specs;
+    bool        hires         = false;
+
+    double      rg_track_gain = 0.0;
+    double      rg_track_peak = 1.0;
+    bool        has_rg        = false;
+
+    std::string album_id;
+    std::string album_title;
+    std::string album_artist;
+    std::string genre;
+    std::string label;
+    std::string upc;
+    std::string release_date_original;
+    int         total_tracks  = 0;
+    int         total_discs   = 1;
+    std::string cover_url;
+    std::string url;
+
+    bool        streamable    = true;
+    bool        purchasable   = true;
+    bool        parental_warning = false;
+};
+
 class QobuzAPI {
 public:
     pfc::string8 get_track_url(const char* track_id, int format_id, abort_callback& abort);
     QobuzTrack   get_track_info(const char* track_id, abort_callback& abort);
+    QobuzTrackDetails get_track_details(const char* track_id, abort_callback& abort);
     std::string  download_url(const char* url);   // unauthenticated GET (CDN images etc.)
     std::vector<QobuzTrack> search_tracks(const char* query, int limit, abort_callback& abort);
     std::vector<QobuzAlbum> search_albums(const char* query, int limit, abort_callback& abort);
     std::vector<QobuzTrack> get_album_tracks(const char* album_id, abort_callback& abort);
+    QobuzAlbumDetails       get_album_details(const char* album_id, abort_callback& abort);
     std::vector<QobuzTrack> get_playlist_tracks(const char* playlist_id, abort_callback& abort);
 
     std::vector<QobuzAlbum> get_favorite_albums(abort_callback &abort);

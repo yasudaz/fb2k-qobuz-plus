@@ -497,6 +497,86 @@ QobuzTrack QobuzAPI::get_track_info(const char* track_id, abort_callback& abort)
     return tr;
 }
 
+QobuzTrackDetails QobuzAPI::get_track_details(const char* track_id, abort_callback& abort) {
+    ensure_initialized(abort);
+
+    std::string url =
+        std::string("https://www.qobuz.com/api.json/0.2/track/get")
+        + "?track_id=" + track_id
+        + "&app_id="   + m_app_id
+        + "&lang=en&locale=en_US";
+
+    auto j = json::parse(do_get(url.c_str(), abort));
+
+    QobuzTrackDetails td;
+    td.id = track_id;
+    td.title = jstr(j, "title");
+    td.version = jstr(j, "version");
+    td.performer = jstr_nested(j, "performer", "name");
+    if (td.performer.empty()) td.performer = jstr_nested(j, "artist", "name");
+    td.composer = jstr_nested(j, "composer", "name");
+    td.work = jstr(j, "work");
+    td.performers = jstr(j, "performers");
+    td.isrc = jstr(j, "isrc");
+    td.copyright = jstr(j, "copyright");
+
+    td.track_number = jint(j, "track_number");
+    td.disc_number = jint(j, "media_number", 1);
+    td.duration = jdbl(j, "duration");
+    td.bit_depth = jint(j, "maximum_bit_depth", 16);
+    td.sampling_rate = jdbl(j, "maximum_sampling_rate", 44.1);
+    td.channels = jint(j, "maximum_channel_count", 2);
+    td.technical_specs = jstr(j, "maximum_technical_specifications");
+    if (j.contains("hires") && j["hires"].is_boolean())
+        td.hires = j["hires"].get<bool>();
+    else
+        td.hires = (td.bit_depth > 16 || td.sampling_rate > 44.1);
+
+    if (j.contains("audio_info") && j["audio_info"].is_object()) {
+        const auto& ai = j["audio_info"];
+        if (ai.contains("replaygain_track_gain") && !ai["replaygain_track_gain"].is_null()) {
+            td.rg_track_gain = jdbl(ai, "replaygain_track_gain");
+            td.rg_track_peak = jdbl(ai, "replaygain_track_peak", 1.0);
+            td.has_rg = true;
+        }
+    }
+
+    if (j.contains("album") && j["album"].is_object()) {
+        const auto& alb = j["album"];
+        td.album_id = jstr(alb, "id");
+        td.album_title = jstr(alb, "title");
+        td.album_artist = jstr_nested(alb, "artist", "name");
+        td.genre = jstr_nested(alb, "genre", "name");
+        if (td.genre.empty() && alb.contains("genres_list") && alb["genres_list"].is_array() && !alb["genres_list"].empty()) {
+            if (alb["genres_list"][0].is_string()) td.genre = alb["genres_list"][0].get<std::string>();
+        }
+        td.label = jstr_nested(alb, "label", "name");
+        td.upc = jstr(alb, "upc");
+        td.release_date_original = jstr(alb, "release_date_original");
+        td.total_tracks = jint(alb, "tracks_count");
+        td.total_discs = jint(alb, "media_count", 1);
+        td.url = jstr(alb, "url");
+
+        if (alb.contains("image") && alb["image"].is_object()) {
+            const auto& img = alb["image"];
+            for (auto key : {"large", "extralarge", "small", "thumbnail"}) {
+                std::string u = jstr(img, key);
+                if (!u.empty()) { td.cover_url = u; break; }
+            }
+        }
+        if (td.copyright.empty()) td.copyright = jstr(alb, "copyright");
+    }
+
+    if (j.contains("parental_warning") && j["parental_warning"].is_boolean())
+        td.parental_warning = j["parental_warning"].get<bool>();
+    if (j.contains("streamable") && j["streamable"].is_boolean())
+        td.streamable = j["streamable"].get<bool>();
+    if (j.contains("purchasable") && j["purchasable"].is_boolean())
+        td.purchasable = j["purchasable"].get<bool>();
+
+    return td;
+}
+
 // ---- search -----------------------------------------------------------------
 
 std::vector<QobuzTrack> QobuzAPI::search_tracks(const char* query, int limit,
@@ -591,6 +671,86 @@ std::vector<QobuzTrack> QobuzAPI::get_album_tracks(const char* album_id,
         if (tr.upc.empty())   tr.upc   = upc;
         out.push_back(tr);
     }
+    return out;
+}
+
+QobuzAlbumDetails QobuzAPI::get_album_details(const char* album_id,
+                                             abort_callback& abort) {
+    ensure_initialized(abort);
+
+    std::string url =
+        std::string("https://www.qobuz.com/api.json/0.2/album/get")
+        + "?album_id=" + album_id
+        + "&app_id="   + m_app_id
+        + "&lang=en&locale=en_US";
+
+    auto j = json::parse(do_get(url.c_str(), abort));
+    QobuzAlbumDetails out;
+    out.id = album_id;
+    if (j.contains("qobuz_id") && !j["qobuz_id"].is_null()) {
+        if (j["qobuz_id"].is_number()) out.qobuz_id = std::to_string(j["qobuz_id"].get<long long>());
+        else if (j["qobuz_id"].is_string()) out.qobuz_id = j["qobuz_id"].get<std::string>();
+    }
+    out.title = jstr(j, "title");
+    out.subtitle = jstr(j, "subtitle");
+    out.artist = jstr_nested(j, "artist", "name");
+    out.composer = jstr_nested(j, "composer", "name");
+
+    if (j.contains("artists") && j["artists"].is_array()) {
+        for (const auto& a : j["artists"]) {
+            if (!a.is_object()) continue;
+            std::string name = jstr(a, "name");
+            std::string roles_str;
+            if (a.contains("roles") && a["roles"].is_array()) {
+                for (const auto& r : a["roles"]) {
+                    if (r.is_string()) {
+                        if (!roles_str.empty()) roles_str += ", ";
+                        roles_str += r.get<std::string>();
+                    }
+                }
+            }
+            if (!name.empty()) {
+                out.artists_roles.push_back({ name, roles_str });
+            }
+        }
+    }
+
+    out.genre = jstr_nested(j, "genre", "name");
+    if (out.genre.empty() && j.contains("genres_list") && j["genres_list"].is_array() && !j["genres_list"].empty()) {
+        if (j["genres_list"][0].is_string()) out.genre = j["genres_list"][0].get<std::string>();
+    }
+    out.label = jstr_nested(j, "label", "name");
+    out.release_type = jstr(j, "release_type");
+    if (out.release_type.empty()) out.release_type = jstr(j, "product_type");
+    out.release_date_original = jstr(j, "release_date_original");
+    out.release_date_stream = jstr(j, "release_date_stream");
+    out.copyright = jstr(j, "copyright");
+    out.upc = jstr(j, "upc");
+
+    out.bit_depth = jint(j, "maximum_bit_depth", 16);
+    out.sampling_rate = jdbl(j, "maximum_sampling_rate", 44.1);
+    out.channels = jint(j, "maximum_channel_count", 2);
+    out.technical_specs = jstr(j, "maximum_technical_specifications");
+    if (j.contains("hires") && j["hires"].is_boolean()) {
+        out.hires = j["hires"].get<bool>();
+    } else {
+        out.hires = (out.bit_depth > 16 || out.sampling_rate > 44.1);
+    }
+
+    out.tracks_count = jint(j, "tracks_count", 0);
+    out.media_count = jint(j, "media_count", 1);
+    out.duration = jdbl(j, "duration", 0.0);
+
+    out.description = jstr(j, "description");
+    out.cover_url = jstr_nested(j, "image", "large");
+    out.url = jstr(j, "url");
+    if (j.contains("parental_warning") && j["parental_warning"].is_boolean())
+        out.parental_warning = j["parental_warning"].get<bool>();
+    if (j.contains("streamable") && j["streamable"].is_boolean())
+        out.streamable = j["streamable"].get<bool>();
+    if (j.contains("purchasable") && j["purchasable"].is_boolean())
+        out.purchasable = j["purchasable"].get<bool>();
+
     return out;
 }
 
